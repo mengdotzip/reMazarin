@@ -14,7 +14,7 @@ target = "localhost:9000"
 tls = true
 
 [[routes]]
-url = "test3.meng.zip:443"
+url = "test4.meng.zip:443"
 target = "localhost:9000"
 tls = true
 
