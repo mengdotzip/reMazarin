@@ -109,33 +109,45 @@ func run() error {
 		return xerrors.Newf("start proxy: %w", err)
 	}
 
-	cleanShutdown(ctx, &wg, servers)
+	// Shutdown wait
+	cleanShutdown(ctx, proxy.Wg, proxy.ErrChan, servers)
 
 	return nil
 }
 
-func cleanShutdown(ctx context.Context, wg *sync.WaitGroup, servers []*http.Server) {
+func cleanShutdown(ctx context.Context, wg *sync.WaitGroup, errChan chan error, servers []*http.Server) error {
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
 		close(done)
 	}()
 
+	var shutdownErr error
+
 	select {
 	case <-ctx.Done():
-		for _, serve := range servers {
-			serve.Close()
-		}
-		shutdownTimeout := 5 * time.Second
-
-		select {
-		case <-done:
-			slog.Info("all goroutines finished")
-		case <-time.After(shutdownTimeout):
-			slog.Warn("shutdown timeout reached, forcing exit")
-		}
-
+		slog.Info("context cancelled")
+	case err := <-errChan:
+		slog.Error("listener failure detected, initiating shutdown", "error", err)
+		shutdownErr = err
 	case <-done:
-		slog.Info("all goroutines finished")
+		slog.Info("all goroutines finished unexpectedly")
+		return nil
 	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for _, serve := range servers {
+		serve.Shutdown(shutdownCtx)
+	}
+	shutdownTimeout := 6 * time.Second
+
+	select {
+	case <-done:
+		slog.Info("all servers stopped gracefully")
+	case <-time.After(shutdownTimeout):
+		slog.Warn("shutdown timeout reached, forcing exit")
+	}
+	return shutdownErr
 }

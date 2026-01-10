@@ -3,6 +3,8 @@ package proxy
 import (
 	"log/slog"
 	"net/http"
+
+	"github.com/mdobak/go-xerrors"
 )
 
 func (p *Proxy) startListeners() []*http.Server {
@@ -16,22 +18,23 @@ func (p *Proxy) startListeners() []*http.Server {
 		server := p.startListener(listener)
 		listenServers = append(listenServers, server)
 	}
-	return nil
+	return listenServers
 }
 
-func (p Proxy) startListener(listener *listenServer) *http.Server {
+func (p *Proxy) startListener(listener *listenServer) *http.Server {
 	mux := http.NewServeMux()
 	server := &http.Server{
-		Addr:    listener.Port,
+		Addr:    ":" + listener.Port,
 		Handler: mux,
 	}
 
+	mux.HandleFunc("/", p.route)
 	p.Wg.Add(1)
 	go p.startServe(server)
 	return server
 }
 
-func (p Proxy) startServe(server *http.Server) {
+func (p *Proxy) startServe(server *http.Server) {
 	defer p.Wg.Done()
 
 	slog.Debug("starting listen server",
@@ -40,6 +43,11 @@ func (p Proxy) startServe(server *http.Server) {
 
 	err := server.ListenAndServe()
 	if err != nil && err != http.ErrServerClosed {
-		//	log.Printf("HTTP Listener: ListenAndServeTLS error: %v", err)
+		p.ErrChan <- xerrors.Newf("server %s failed: %w", server.Addr, err)
+		return
 	}
+
+	slog.Debug("closing listen server",
+		"port", server.Addr,
+	)
 }

@@ -25,15 +25,17 @@ type Proxy struct {
 	Proxies []ProxyRoute
 	servers map[string]*listenServer
 	Wg      *sync.WaitGroup
+	ErrChan chan error
 }
 
-func (p Proxy) StartProxy() ([]*http.Server, error) {
+func (p *Proxy) StartProxy() ([]*http.Server, error) {
 
 	slog.Info("starting proxies",
 		"count", len(p.Proxies),
 	)
 
 	p.servers = make(map[string]*listenServer)
+	p.ErrChan = make(chan error, len(p.servers))
 
 	if err := p.parseProxies(); err != nil {
 		return nil, xerrors.Newf("parse proxies: %w", err)

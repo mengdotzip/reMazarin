@@ -9,15 +9,15 @@ enabled = true
 url = "admin.meng.zip:8081"
 
 [[routes]]
-url = "test.meng.zip:443"
+url = "test.meng.zip:6789"
 target = "localhost:9000"
 tls = true
 
 [[routes]]
-url = "test4.meng.zip:443"
+url = "test4.meng.zip:6789"
 target = "localhost:9000"
 tls = true
 
 [[routes]]
-url = "test2.meng.zip/public:80"
+url = "test2.meng.zip/public:8080"
 target = "192.168.129.130:9001"
