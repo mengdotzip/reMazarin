@@ -12,11 +12,15 @@ url = "admin.meng.zip:8081"
 url = "test.meng.zip:6789"
 target = "localhost:9000"
 tls = true
+cert = "./certs/domain.cert"
+key = "./certs/private.key"
 
 [[routes]]
 url = "test4.meng.zip:6789"
 target = "localhost:9000"
 tls = true
+cert = "./certs/domain.cert"
+key = "./certs/private.key"
 
 [[routes]]
 url = "test2.meng.zip/public:8080"

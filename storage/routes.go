@@ -13,6 +13,8 @@ type Route struct {
 	Url       string
 	Target    string
 	Tls       bool
+	Cert      string
+	Key       string
 	Enabled   bool
 	Source    string
 	CreatedAt time.Time
@@ -23,6 +25,8 @@ type ConfigRoute struct {
 	Url    string
 	Target string
 	Tls    bool
+	Cert   string
+	Key    string
 }
 
 func (s *Storage) SyncRoutes(routes []ConfigRoute) error {
@@ -51,12 +55,12 @@ func (s *Storage) SyncRoutes(routes []ConfigRoute) error {
 
 	// Insert fresh routes from TOML
 	insertQuery := `
-		INSERT INTO proxy_routes (url, target, tls, source)
-		VALUES (?, ?, ?, 'config')
+		INSERT INTO proxy_routes (url, target, tls, cert, key, source)
+		VALUES (?, ?, ?, ?, ?, 'config')
 	`
 
 	for _, route := range routes {
-		_, err := tx.Exec(insertQuery, route.Url, route.Target, route.Tls)
+		_, err := tx.Exec(insertQuery, route.Url, route.Target, route.Tls, route.Cert, route.Key)
 		if err != nil {
 			return xerrors.Newf("insert route %s: %w", route.Url, err)
 		}
@@ -73,7 +77,7 @@ func (s *Storage) SyncRoutes(routes []ConfigRoute) error {
 
 func (s *Storage) GetAllRoutes(ctx context.Context) ([]Route, error) {
 	query := `
-		SELECT id, url, target, tls, enabled, source, created_at, updated_at
+		SELECT id, url, target, tls, cert, key, enabled, source, created_at, updated_at
 		FROM proxy_routes
 		WHERE enabled = TRUE
 		ORDER BY url
@@ -88,7 +92,7 @@ func (s *Storage) GetAllRoutes(ctx context.Context) ([]Route, error) {
 	var routes []Route
 	for rows.Next() {
 		var r Route
-		err := rows.Scan(&r.ID, &r.Url, &r.Target, &r.Tls, &r.Enabled, &r.Source, &r.CreatedAt, &r.UpdatedAt)
+		err := rows.Scan(&r.ID, &r.Url, &r.Target, &r.Tls, &r.Cert, &r.Key, &r.Enabled, &r.Source, &r.CreatedAt, &r.UpdatedAt)
 		if err != nil {
 			return nil, xerrors.Newf("scan route: %w", err)
 		}
@@ -104,7 +108,7 @@ func (s *Storage) GetAllRoutes(ctx context.Context) ([]Route, error) {
 
 func (s *Storage) GetRouteByUrl(ctx context.Context, url string) (*Route, error) {
 	query := `
-		SELECT id, url, target, tls, enabled, source, created_at, updated_at
+		SELECT id, url, target, tls, cert, key, enabled, source, created_at, updated_at
 		FROM proxy_routes
 		WHERE url = ? AND enabled = TRUE
 	`

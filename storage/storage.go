@@ -38,6 +38,8 @@ func (s *Storage) initSchema() error {
 		url TEXT NOT NULL UNIQUE,
 		target TEXT NOT NULL,
 		tls BOOLEAN DEFAULT FALSE,
+		cert TEXT,
+		key TEXT,
 		enabled BOOLEAN DEFAULT TRUE,
 		source TEXT NOT NULL,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

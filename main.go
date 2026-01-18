@@ -64,6 +64,8 @@ func run() error {
 				Url:    r.Url,
 				Target: r.Target,
 				Tls:    r.Tls,
+				Cert:   r.Cert,
+				Key:    r.Key,
 			}
 		}
 
@@ -84,6 +86,8 @@ func run() error {
 				Url:    r.Url,
 				Target: r.Target,
 				Tls:    r.Tls,
+				Cert:   r.Cert,
+				Key:    r.Key,
 			}
 		}
 	} else {
@@ -93,6 +97,8 @@ func run() error {
 				Url:    r.Url,
 				Target: r.Target,
 				Tls:    r.Tls,
+				Cert:   r.Cert,
+				Key:    r.Key,
 			}
 		}
 	}

@@ -28,20 +28,44 @@ func (p *Proxy) startListener(listener *listenServer) *http.Server {
 		Handler: mux,
 	}
 
+	if listener.Tls {
+		tlsConfig, err := createTLSConfig(listener.CertPath, listener.KeyPath)
+		if err != nil {
+			slog.Error("failed to create TLS config",
+				"port", listener.Port,
+				"error", err,
+			)
+			p.ErrChan <- xerrors.Newf("TLS config for port %s: %w", listener.Port, err)
+			return server
+		}
+		server.TLSConfig = tlsConfig
+
+		slog.Info("TLS configured for listener",
+			"port", listener.Port,
+			"min_version", "TLS 1.2",
+		)
+	}
+
 	mux.HandleFunc("/", p.route)
 	p.Wg.Add(1)
-	go p.startServe(server)
+	go p.startServe(server, listener.Tls)
 	return server
 }
 
-func (p *Proxy) startServe(server *http.Server) {
+func (p *Proxy) startServe(server *http.Server, useTLS bool) {
 	defer p.Wg.Done()
 
 	slog.Debug("starting listen server",
 		"port", server.Addr,
 	)
 
-	err := server.ListenAndServe()
+	var err error
+	if useTLS {
+		err = server.ListenAndServeTLS("", "")
+	} else {
+		err = server.ListenAndServe()
+	}
+
 	if err != nil && err != http.ErrServerClosed {
 		p.ErrChan <- xerrors.Newf("server %s failed: %w", server.Addr, err)
 		return

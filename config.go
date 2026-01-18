@@ -26,6 +26,8 @@ type Route struct {
 	Url    string `toml:"url"`
 	Target string `toml:"target"`
 	Tls    bool   `toml:"tls"`
+	Cert   string `toml:"cert"`
+	Key    string `toml:"key"`
 }
 
 func loadConfig(path string) (*Config, error) {

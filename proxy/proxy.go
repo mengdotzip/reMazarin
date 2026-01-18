@@ -3,6 +3,8 @@ package proxy
 import (
 	"log/slog"
 	"net/http"
+	"net/http/httputil"
+	"os"
 	"strings"
 	"sync"
 
@@ -13,12 +15,17 @@ type ProxyRoute struct {
 	Url    string
 	Target string
 	Tls    bool
+	Cert   string
+	Key    string
 }
 
 type listenServer struct {
-	Port   string
-	Tls    bool
-	Routes []ProxyRoute
+	Port       string
+	Tls        bool
+	CertPath   string
+	KeyPath    string
+	Routes     map[string]*ProxyRoute
+	ProxyCache map[string]*httputil.ReverseProxy
 }
 
 type Proxy struct {
@@ -41,6 +48,10 @@ func (p *Proxy) StartProxy() ([]*http.Server, error) {
 		return nil, xerrors.Newf("parse proxies: %w", err)
 	}
 
+	if err := p.initProxies(); err != nil {
+		return nil, xerrors.Newf("init proxies: %w", err)
+	}
+
 	servers := p.startListeners()
 	return servers, nil
 }
@@ -59,12 +70,25 @@ func (p *Proxy) parseProxies() error {
 		}
 		usedUrls[route.Url] = true
 
+		if route.Tls {
+			if route.Cert == "" || route.Key == "" {
+				return xerrors.Newf("route %s has TLS enabled but missing cert/key paths", route.Url)
+			}
+
+			if _, err := os.Stat(route.Cert); err != nil {
+				return xerrors.Newf("cert file not found: %s", route.Cert)
+			}
+			if _, err := os.Stat(route.Key); err != nil {
+				return xerrors.Newf("key file not found: %s", route.Key)
+			}
+		}
+
 		if existing, exists := p.servers[port]; exists {
 			if existing.Tls != route.Tls {
 				return xerrors.Newf("tls configuration: cant have port %v listen on tls true and false", port)
 			}
 
-			existing.Routes = append(existing.Routes, route)
+			existing.Routes[host] = &route
 			slog.Debug("new listen server route",
 				"port", port,
 				"tls", route.Tls,
@@ -73,13 +97,15 @@ func (p *Proxy) parseProxies() error {
 			continue
 		}
 
-		var routes []ProxyRoute
-		routes = append(routes, route)
 		ls := listenServer{
-			Port:   port,
-			Tls:    route.Tls,
-			Routes: routes,
+			Port:       port,
+			Tls:        route.Tls,
+			CertPath:   route.Cert,
+			KeyPath:    route.Key,
+			Routes:     make(map[string]*ProxyRoute),
+			ProxyCache: make(map[string]*httputil.ReverseProxy),
 		}
+		ls.Routes[host] = &route
 		p.servers[port] = &ls
 
 		slog.Debug("new listen server conf",
@@ -90,6 +116,29 @@ func (p *Proxy) parseProxies() error {
 
 	}
 
+	return nil
+}
+
+func (p *Proxy) initProxies() error {
+	slog.Info("initializing reverse proxies")
+
+	for port, server := range p.servers {
+		for host, route := range server.Routes {
+			proxy, err := createReverseProxy(route)
+			if err != nil {
+				return xerrors.Newf("create proxy for %s: %w", route.Url, err)
+			}
+
+			server.ProxyCache[host] = proxy
+			slog.Debug("proxy cached",
+				"host", host,
+				"port", port,
+				"target", route.Target,
+			)
+		}
+	}
+
+	slog.Info("all proxies initialized", "count", len(p.Proxies))
 	return nil
 }
 
