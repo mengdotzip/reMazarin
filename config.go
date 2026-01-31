@@ -25,6 +25,7 @@ type AdminConfig struct {
 type Route struct {
 	Url    string `toml:"url"`
 	Target string `toml:"target"`
+	Type   string `toml:"type"`
 	Tls    bool   `toml:"tls"`
 	Cert   string `toml:"cert"`
 	Key    string `toml:"key"`

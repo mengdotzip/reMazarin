@@ -3,7 +3,6 @@ package proxy
 import (
 	"log/slog"
 	"net/http"
-	"net/http/httputil"
 	"os"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 type ProxyRoute struct {
 	Url    string
 	Target string
+	Type   string
 	Tls    bool
 	Cert   string
 	Key    string
@@ -25,7 +25,7 @@ type listenServer struct {
 	CertPath   string
 	KeyPath    string
 	Routes     map[string]*ProxyRoute
-	ProxyCache map[string]*httputil.ReverseProxy
+	ProxyCache map[string]http.Handler
 }
 
 type Proxy struct {
@@ -103,7 +103,7 @@ func (p *Proxy) parseProxies() error {
 			CertPath:   route.Cert,
 			KeyPath:    route.Key,
 			Routes:     make(map[string]*ProxyRoute),
-			ProxyCache: make(map[string]*httputil.ReverseProxy),
+			ProxyCache: make(map[string]http.Handler),
 		}
 		ls.Routes[host] = &route
 		p.servers[port] = &ls
@@ -124,17 +124,31 @@ func (p *Proxy) initProxies() error {
 
 	for port, server := range p.servers {
 		for host, route := range server.Routes {
-			proxy, err := createReverseProxy(route)
-			if err != nil {
-				return xerrors.Newf("create proxy for %s: %w", route.Url, err)
-			}
+			if route.Type == "static" { // TODO: make this a switch
+				handler, err := createStaticHandler(route)
+				if err != nil {
+					return xerrors.Newf("create handler for %s: %w", route.Url, err)
+				}
 
-			server.ProxyCache[host] = proxy
-			slog.Debug("proxy cached",
-				"host", host,
-				"port", port,
-				"target", route.Target,
-			)
+				server.ProxyCache[host] = handler
+				slog.Debug("static serve cached",
+					"host", host,
+					"port", port,
+					"target", route.Target,
+				)
+			} else {
+				proxy, err := createReverseProxy(route)
+				if err != nil {
+					return xerrors.Newf("create proxy for %s: %w", route.Url, err)
+				}
+
+				server.ProxyCache[host] = proxy
+				slog.Debug("proxy cached",
+					"host", host,
+					"port", port,
+					"target", route.Target,
+				)
+			}
 		}
 	}
 

@@ -37,6 +37,7 @@ func (s *Storage) initSchema() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		url TEXT NOT NULL UNIQUE,
 		target TEXT NOT NULL,
+		type TEXT DEFAULT 'proxy',
 		tls BOOLEAN DEFAULT FALSE,
 		cert TEXT,
 		key TEXT,

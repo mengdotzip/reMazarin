@@ -63,6 +63,7 @@ func run() error {
 			configRoutes[i] = storage.ConfigRoute{
 				Url:    r.Url,
 				Target: r.Target,
+				Type:   r.Type,
 				Tls:    r.Tls,
 				Cert:   r.Cert,
 				Key:    r.Key,
@@ -85,6 +86,7 @@ func run() error {
 			proxyRoutes[i] = proxy.ProxyRoute{
 				Url:    r.Url,
 				Target: r.Target,
+				Type:   r.Type,
 				Tls:    r.Tls,
 				Cert:   r.Cert,
 				Key:    r.Key,
@@ -96,6 +98,7 @@ func run() error {
 			proxyRoutes[i] = proxy.ProxyRoute{
 				Url:    r.Url,
 				Target: r.Target,
+				Type:   r.Type,
 				Tls:    r.Tls,
 				Cert:   r.Cert,
 				Key:    r.Key,

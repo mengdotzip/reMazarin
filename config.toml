@@ -23,5 +23,13 @@ cert = "./certs/domain.cert"
 key = "./certs/private.key"
 
 [[routes]]
+url = "test.meng.zip:448"
+target = "./www/auth"
+type = "static"
+tls = true
+cert = "./certs/domain.cert"
+key = "./certs/private.key"
+
+[[routes]]
 url = "test2.meng.zip/public:8080"
 target = "192.168.129.130:9001"

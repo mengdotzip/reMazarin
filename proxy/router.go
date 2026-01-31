@@ -49,5 +49,8 @@ func (p *Proxy) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	slog.Debug("routing",
+		"host", r.Host,
+	)
 	proxy.ServeHTTP(w, r)
 }
