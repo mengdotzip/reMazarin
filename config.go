@@ -15,11 +15,19 @@ type Config struct {
 type WebConfig struct {
 	Enabled bool   `toml:"enabled"`
 	Url     string `toml:"url"`
+	Target  string `toml:"target"`
+	Tls     bool   `toml:"tls"`
+	Cert    string `toml:"cert"`
+	Key     string `toml:"key"`
 }
 
 type AdminConfig struct {
 	Enabled bool   `toml:"enabled"`
 	Url     string `toml:"url"`
+	Target  string `toml:"target"`
+	Tls     bool   `toml:"tls"`
+	Cert    string `toml:"cert"`
+	Key     string `toml:"key"`
 }
 
 type Route struct {
@@ -41,12 +49,48 @@ func loadConfig(path string) (*Config, error) {
 	if cfg.Web.Url == "" {
 		cfg.Web.Url = "localhost:8080"
 	}
+	if cfg.Web.Target == "" {
+		cfg.Web.Target = "./www/auth"
+	}
+
 	if cfg.Database == "" {
 		cfg.Database = "./remazarin.db"
 	}
+
 	if cfg.Admin.Url == "" {
 		cfg.Admin.Url = "localhost:8081"
 	}
+	if cfg.Admin.Target == "" {
+		cfg.Admin.Target = "./www/admin"
+	}
+
+	generateAuthAdm(&cfg)
 
 	return &cfg, nil
+}
+
+func generateAuthAdm(cfg *Config) {
+	if cfg.Web.Enabled {
+		webRoute := Route{
+			Url:    cfg.Web.Url,
+			Target: cfg.Web.Target,
+			Type:   "static",
+			Tls:    cfg.Web.Tls,
+			Cert:   cfg.Web.Cert,
+			Key:    cfg.Web.Key,
+		}
+		cfg.Routes = append(cfg.Routes, webRoute)
+	}
+
+	if cfg.Admin.Enabled {
+		admRoute := Route{
+			Url:    cfg.Admin.Url,
+			Target: cfg.Admin.Target,
+			Type:   "static",
+			Tls:    cfg.Admin.Tls,
+			Cert:   cfg.Admin.Cert,
+			Key:    cfg.Admin.Key,
+		}
+		cfg.Routes = append(cfg.Routes, admRoute)
+	}
 }

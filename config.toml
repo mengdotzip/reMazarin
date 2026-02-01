@@ -1,12 +1,18 @@
 [web]
 enabled = true
 url = "proxy.meng.zip:8080"
+tls = true
+cert = "./certs/domain.cert"
+key = "./certs/private.key"
 
 database = "./remazarin.db"
 
 [admin]
 enabled = true
 url = "admin.meng.zip:8081"
+tls = true
+cert = "./certs/domain.cert"
+key = "./certs/private.key"
 
 [[routes]]
 url = "test.meng.zip:6789"
@@ -16,14 +22,14 @@ cert = "./certs/domain.cert"
 key = "./certs/private.key"
 
 [[routes]]
-url = "test4.meng.zip:6789"
+url = "test2.meng.zip:6789"
 target = "localhost:9000"
 tls = true
 cert = "./certs/domain.cert"
 key = "./certs/private.key"
 
 [[routes]]
-url = "test.meng.zip:448"
+url = "tes3.meng.zip:443"
 target = "./www/auth"
 type = "static"
 tls = true
@@ -31,5 +37,5 @@ cert = "./certs/domain.cert"
 key = "./certs/private.key"
 
 [[routes]]
-url = "test2.meng.zip/public:8080"
+url = "test4.meng.zip/public:8090"
 target = "192.168.129.130:9001"
