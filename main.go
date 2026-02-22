@@ -123,7 +123,10 @@ func run() error {
 	}
 
 	// Shutdown wait
-	cleanShutdown(ctx, proxy.Wg, proxy.ErrChan, servers)
+	shtdwnErr := cleanShutdown(ctx, proxy.Wg, proxy.ErrChan, servers)
+	if shtdwnErr != nil {
+		return xerrors.Newf("clean shutdown error: %w", err)
+	}
 
 	return nil
 }
@@ -152,7 +155,9 @@ func cleanShutdown(ctx context.Context, wg *sync.WaitGroup, errChan chan error, 
 	defer cancel()
 
 	for _, serve := range servers {
-		serve.Shutdown(shutdownCtx)
+		if err := serve.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("server shutdown error", "addr", serve.Addr, "error", err)
+		}
 	}
 	shutdownTimeout := 6 * time.Second
 

@@ -36,9 +36,8 @@ func createFileHandler(route *ProxyRoute) (http.Handler, error) {
 
 	fsys := root.FS()
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		slog.Debug("file server 1")
+		slog.Debug("serving static file", "file", filename, "path", r.URL.Path)
 		http.ServeFileFS(w, r, fsys, filename)
-		slog.Debug("file server 2")
 	})
 
 	slog.Info("static file handler created", "file", route.Target)
@@ -52,13 +51,9 @@ func createFolderHandler(route *ProxyRoute) (http.Handler, error) {
 	}
 
 	fsys := root.FS()
-	fileServer := http.FileServerFS(fsys)
-
-	var handler http.Handler
 	slog.Info("static folder handler created",
 		"folder", route.Target,
 	)
-	handler = fileServer
 
-	return handler, nil
+	return http.FileServerFS(fsys), nil
 }

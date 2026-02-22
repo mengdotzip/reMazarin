@@ -117,7 +117,7 @@ func (s *Storage) GetRouteByUrl(ctx context.Context, url string) (*Route, error)
 
 	var r Route
 	err := s.db.QueryRowContext(ctx, query, url).Scan(
-		&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls,
+		&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
 		&r.Enabled, &r.Source, &r.CreatedAt, &r.UpdatedAt,
 	)
 	if err != nil {

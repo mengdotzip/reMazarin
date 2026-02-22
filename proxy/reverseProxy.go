@@ -3,6 +3,7 @@ package proxy
 import (
 	"crypto/tls"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -36,7 +37,8 @@ func createReverseProxy(route *ProxyRoute) (*httputil.ReverseProxy, error) {
 	// Allow insecure HTTPS (not used yet)
 	if strings.HasPrefix(targetAddr, "https://") {
 		transport.TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: true,
+			ServerName: target.Hostname(),
+			MinVersion: tls.VersionTLS12,
 		}
 	}
 
@@ -49,6 +51,14 @@ func createReverseProxy(route *ProxyRoute) (*httputil.ReverseProxy, error) {
 		req.Header.Set("X-Forwarded-Host", req.Host)
 		req.Header.Set("X-Origin-Host", target.Host)
 		req.Header.Set("X-Proxy", "reMazarin")
+
+		clientIP, _, err := net.SplitHostPort(req.RemoteAddr)
+		if err == nil {
+			if prior := req.Header.Get("X-Forwarded-For"); prior != "" {
+				clientIP = prior + ", " + clientIP
+			}
+			req.Header.Set("X-Forwarded-For", clientIP)
+		}
 	}
 
 	// Error handler

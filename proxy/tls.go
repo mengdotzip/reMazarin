@@ -35,8 +35,7 @@ func createTLSConfig(certPath, keyPath string) (*tls.Config, error) {
 	}
 
 	cfg := &tls.Config{
-		Certificates:             []tls.Certificate{cert},
-		PreferServerCipherSuites: true,
+		Certificates: []tls.Certificate{cert},
 
 		CurvePreferences: []tls.CurveID{
 			tls.X25519,

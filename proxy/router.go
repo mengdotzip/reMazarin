@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 )
@@ -11,40 +12,39 @@ func (p *Proxy) route(w http.ResponseWriter, r *http.Request) {
 		"host", r.Host,
 	)
 
-	reqHost := strings.Split(strings.ToLower(r.Host), ":")
-	var currentPort string
-	if len(reqHost) == 1 {
-		if r.TLS == nil {
-			currentPort = "80"
+	host, port, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		host = strings.ToLower(r.Host)
+		if r.TLS != nil {
+			port = "443"
 		} else {
-			currentPort = "443"
+			port = "80"
 		}
-	} else {
-		currentPort = reqHost[1]
 	}
+	host = strings.ToLower(host)
 
 	// Lookup
-	ls, ok := p.servers[currentPort]
+	ls, ok := p.servers[port]
 	if !ok {
 		slog.Debug("requested port does not exist",
-			"port", currentPort,
+			"port", port,
 		)
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
-	_, ok = ls.Routes[reqHost[0]] // We dont really need this anymore, the proxy cache can look this up
+	_, ok = ls.Routes[host] // We dont really need this anymore, the proxy cache can look this up
 	if !ok {
 		slog.Debug("requested url does not exist",
-			"url", reqHost[0],
+			"url", host,
 		)
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return
 	}
 
-	proxy, ok := ls.ProxyCache[reqHost[0]]
+	proxy, ok := ls.ProxyCache[host]
 	if !ok {
-		slog.Error("proxy not cached", "host", reqHost[0])
+		slog.Error("proxy not cached", "host", host)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}

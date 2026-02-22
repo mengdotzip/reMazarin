@@ -36,7 +36,7 @@ func (p *Proxy) startListener(listener *listenServer) *http.Server {
 				"error", err,
 			)
 			p.ErrChan <- xerrors.Newf("TLS config for port %s: %w", listener.Port, err)
-			return server
+			return nil
 		}
 		server.TLSConfig = tlsConfig
 

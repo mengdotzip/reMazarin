@@ -21,6 +21,10 @@ func New(path string) (*Storage, error) {
 		return nil, xerrors.Newf("open database: %w", err)
 	}
 
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+
 	s := &Storage{db: db}
 
 	if err := s.initSchema(); err != nil {

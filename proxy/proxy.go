@@ -42,7 +42,6 @@ func (p *Proxy) StartProxy() ([]*http.Server, error) {
 	)
 
 	p.servers = make(map[string]*listenServer)
-	p.ErrChan = make(chan error, len(p.servers))
 
 	if err := p.parseProxies(); err != nil {
 		return nil, xerrors.Newf("parse proxies: %w", err)
@@ -52,6 +51,7 @@ func (p *Proxy) StartProxy() ([]*http.Server, error) {
 		return nil, xerrors.Newf("init proxies: %w", err)
 	}
 
+	p.ErrChan = make(chan error, len(p.servers))
 	servers := p.startListeners()
 	return servers, nil
 }
