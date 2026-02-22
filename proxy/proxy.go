@@ -124,7 +124,8 @@ func (p *Proxy) initProxies() error {
 
 	for port, server := range p.servers {
 		for host, route := range server.Routes {
-			if route.Type == "static" { // TODO: make this a switch
+			switch route.Type {
+			case "static":
 				handler, err := createStaticHandler(route)
 				if err != nil {
 					return xerrors.Newf("create handler for %s: %w", route.Url, err)
@@ -136,7 +137,7 @@ func (p *Proxy) initProxies() error {
 					"port", port,
 					"target", route.Target,
 				)
-			} else {
+			case "proxy", "":
 				proxy, err := createReverseProxy(route)
 				if err != nil {
 					return xerrors.Newf("create proxy for %s: %w", route.Url, err)
@@ -148,6 +149,20 @@ func (p *Proxy) initProxies() error {
 					"port", port,
 					"target", route.Target,
 				)
+			case "api":
+				api, err := createAPIHandler(route)
+				if err != nil {
+					return xerrors.Newf("create api for %s: %w", route.Url, err)
+				}
+				server.ProxyCache[host] = api
+				slog.Debug("api cached",
+					"host", host,
+					"port", port,
+					"target", route.Target,
+				)
+
+			default:
+				return xerrors.Newf("invalid config, unkown type: %s", route.Type)
 			}
 		}
 	}

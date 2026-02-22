@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"reMazarin/api"
 	"reMazarin/proxy"
 	"reMazarin/storage"
 	"sync"
@@ -46,6 +47,9 @@ func run() error {
 		"admin_enabled", cfg.Admin.Enabled,
 		"routes_count", len(cfg.Routes),
 	)
+
+	//init api functions
+	api.InitApi()
 
 	var proxyRoutes []proxy.ProxyRoute
 
