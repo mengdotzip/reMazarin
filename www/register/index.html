@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>REGISTER Mazarin</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+      <h1 class="headerText">REGISTER</h1>
+      <form id="authForm" class="formContainer" method="POST" action="/sse">
+        <input type="text" id="username" name="username" placeholder="Enter your username" required />
+        <input type="password" id="password" name="password" placeholder="Enter your password" required />
+        <input type="text" id="key" name="invite" placeholder="Enter your invite" required />
+        <button type="submit">Register</button>
+      </form>
+    </div>
+</body>
+</html>

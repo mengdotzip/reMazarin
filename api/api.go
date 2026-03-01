@@ -11,7 +11,7 @@ type APIHandler func(http.ResponseWriter, *http.Request)
 
 var registry = make(map[string]APIHandler)
 
-func InitApi() {
+func InitApi() error {
 	slog.Debug("initializing api handlers")
 
 	//////////////////////////////////////////////////////////////////////////////////////////
@@ -22,8 +22,13 @@ func InitApi() {
 	/////////////////////////////////////////////////////////////////////////////////////
 	//ADD YOUR CUSTOM FUNCTION HERE//
 	////////////////////////////////
-	register("example", HandleExample)
-	register("health", HandleHealth)
+	if err := register("example", HandleExample); err != nil {
+		return err
+	}
+	if err := register("health", HandleHealth); err != nil {
+		return err
+	}
+	return nil
 	/////////////////////////////
 	////////////////////////////
 }

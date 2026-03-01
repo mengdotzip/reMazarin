@@ -1,3 +1,5 @@
+database = "./remazarin.db"
+
 [web]
 enabled = true
 url = "proxy.meng.zip:8080"
@@ -5,14 +7,17 @@ tls = true
 cert = "./certs/domain.cert"
 key = "./certs/private.key"
 
-database = "./remazarin.db"
-
 [admin]
 enabled = true
 url = "admin.meng.zip:8081"
 tls = true
 cert = "./certs/domain.cert"
 key = "./certs/private.key"
+
+[otel]
+enabled = true
+endpoint = "10.0.10.184:4317"
+interval = 15
 
 [[routes]]
 url = "test.meng.zip:6789"
@@ -37,7 +42,7 @@ cert = "./certs/domain.cert"
 key = "./certs/private.key"
 
 [[routes]]
-url = "test4.meng.zip/public:8090"
+url = "test4.meng.zip:8090"
 target = "192.168.129.130:9001"
 
 [[routes]]

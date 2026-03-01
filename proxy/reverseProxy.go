@@ -54,10 +54,9 @@ func createReverseProxy(route *ProxyRoute) (*httputil.ReverseProxy, error) {
 
 		clientIP, _, err := net.SplitHostPort(req.RemoteAddr)
 		if err == nil {
-			if prior := req.Header.Get("X-Forwarded-For"); prior != "" {
-				clientIP = prior + ", " + clientIP
-			}
 			req.Header.Set("X-Forwarded-For", clientIP)
+		} else {
+			req.Header.Del("X-Forwarded-For")
 		}
 	}
 

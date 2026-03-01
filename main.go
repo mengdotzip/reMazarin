@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,8 @@ import (
 	"time"
 
 	"github.com/mdobak/go-xerrors"
+
+	"go.opentelemetry.io/contrib/instrumentation/runtime"
 )
 
 const version = "0.0.1"
@@ -48,11 +51,30 @@ func run() error {
 		"routes_count", len(cfg.Routes),
 	)
 
-	//init api functions
-	api.InitApi()
+	// Set up OpenTelemetry. ----
+	otelShutdown, err := setupOTelSDK(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	// Handle shutdown properly so nothing leaks.
+	defer func() {
+		err = xerrors.Newf("serve shutdown error (otel): %w", errors.Join(err, otelShutdown(context.Background())))
+	}()
 
+	if err := runtime.Start(
+		runtime.WithMinimumReadMemStatsInterval(time.Second),
+	); err != nil {
+		slog.Error("otel runtime metrics start failed", "error", err)
+	}
+	// --------
+
+	// Init api functions
+	if err := api.InitApi(); err != nil {
+		return xerrors.Newf("init api: %w", err)
+	}
+
+	// Init routes
 	var proxyRoutes []proxy.ProxyRoute
-
 	if cfg.Admin.Enabled || cfg.Web.Enabled {
 		// Initialize storage
 		store, err := storage.New(cfg.Database)
@@ -117,7 +139,7 @@ func run() error {
 		Wg:      &wg,
 	}
 
-	servers, err := proxy.StartProxy()
+	servers, err := proxy.StartProxy(cfg.Otel.Enabled)
 	if err != nil {
 		return xerrors.Newf("start proxy: %w", err)
 	}
@@ -125,7 +147,7 @@ func run() error {
 	// Shutdown wait
 	shtdwnErr := cleanShutdown(ctx, proxy.Wg, proxy.ErrChan, servers)
 	if shtdwnErr != nil {
-		return xerrors.Newf("clean shutdown error: %w", err)
+		return xerrors.Newf("clean shutdown error: %w", shtdwnErr)
 	}
 
 	return nil

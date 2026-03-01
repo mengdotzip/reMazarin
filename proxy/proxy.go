@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/mdobak/go-xerrors"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 type ProxyRoute struct {
@@ -35,7 +36,7 @@ type Proxy struct {
 	ErrChan chan error
 }
 
-func (p *Proxy) StartProxy() ([]*http.Server, error) {
+func (p *Proxy) StartProxy(otel bool) ([]*http.Server, error) {
 
 	slog.Info("starting proxies",
 		"count", len(p.Proxies),
@@ -47,7 +48,7 @@ func (p *Proxy) StartProxy() ([]*http.Server, error) {
 		return nil, xerrors.Newf("parse proxies: %w", err)
 	}
 
-	if err := p.initProxies(); err != nil {
+	if err := p.initProxies(otel); err != nil {
 		return nil, xerrors.Newf("init proxies: %w", err)
 	}
 
@@ -119,7 +120,7 @@ func (p *Proxy) parseProxies() error {
 	return nil
 }
 
-func (p *Proxy) initProxies() error {
+func (p *Proxy) initProxies(otel bool) error {
 	slog.Info("initializing reverse proxies")
 
 	for port, server := range p.servers {
@@ -129,6 +130,10 @@ func (p *Proxy) initProxies() error {
 				handler, err := createStaticHandler(route)
 				if err != nil {
 					return xerrors.Newf("create handler for %s: %w", route.Url, err)
+				}
+
+				if otel {
+					handler = otelhttp.NewHandler(handler, "/")
 				}
 
 				server.ProxyCache[host] = handler
@@ -143,7 +148,13 @@ func (p *Proxy) initProxies() error {
 					return xerrors.Newf("create proxy for %s: %w", route.Url, err)
 				}
 
-				server.ProxyCache[host] = proxy
+				var newHandle http.Handler
+				newHandle = proxy
+				if otel {
+					newHandle = otelhttp.NewHandler(proxy, "/")
+				}
+
+				server.ProxyCache[host] = newHandle
 				slog.Debug("proxy cached",
 					"host", host,
 					"port", port,
@@ -154,6 +165,11 @@ func (p *Proxy) initProxies() error {
 				if err != nil {
 					return xerrors.Newf("create api for %s: %w", route.Url, err)
 				}
+
+				if otel {
+					api = otelhttp.NewHandler(api, "/")
+				}
+
 				server.ProxyCache[host] = api
 				slog.Debug("api cached",
 					"host", host,

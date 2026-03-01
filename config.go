@@ -9,6 +9,7 @@ type Config struct {
 	Web      WebConfig   `toml:"web"`
 	Database string      `toml:"database"`
 	Admin    AdminConfig `toml:"admin"`
+	Otel     OtelConfig  `toml:"otel"`
 	Routes   []Route     `toml:"routes"`
 }
 
@@ -30,6 +31,12 @@ type AdminConfig struct {
 	Key     string `toml:"key"`
 }
 
+type OtelConfig struct {
+	Enabled  bool   `toml:"enabled"`
+	Endpoint string `toml:"endpoint"`
+	Interval int    `toml:"interval"`
+}
+
 type Route struct {
 	Url    string `toml:"url"`
 	Target string `toml:"target"`
@@ -46,6 +53,13 @@ func loadConfig(path string) (*Config, error) {
 		return nil, xerrors.Newf("decode config: %w", err)
 	}
 
+	validateConfig(&cfg)
+	generateAuthAdm(&cfg)
+
+	return &cfg, nil
+}
+
+func validateConfig(cfg *Config) {
 	if cfg.Web.Url == "" {
 		cfg.Web.Url = "localhost:8080"
 	}
@@ -63,10 +77,6 @@ func loadConfig(path string) (*Config, error) {
 	if cfg.Admin.Target == "" {
 		cfg.Admin.Target = "./www/admin"
 	}
-
-	generateAuthAdm(&cfg)
-
-	return &cfg, nil
 }
 
 func generateAuthAdm(cfg *Config) {

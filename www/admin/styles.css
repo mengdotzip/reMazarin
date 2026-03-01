@@ -19,4 +19,70 @@ body {
     padding: 30px;
     width: 90%;
     height: 90%;
+    display: flex;
+    flex-direction: column;
+}
+
+.menuContainer {
+    display: flex;
+    justify-content: space-between;
+    min-width: 40%;
+    align-self: center;
+    padding: 25px;
+}
+
+button{
+    background-color: rgba(45, 99, 133, 0.2);
+    border: 1px solid rgb(255, 255, 255);
+    border-radius: 32px;
+    height: 32px;
+    padding-left: 10px;
+    padding-right: 10px;
+    box-shadow: 0 0 1px rgba(0,0,0,.05), 5px 5px 1px rgba(0,0,0,.1);
+
+    transition: all 0.1s ease-in-out;
+    cursor: pointer;
+}
+
+button:hover {
+    background-color: rgba(45, 99, 133, 0.35);
+    box-shadow: 0 0 1px rgba(0,0,0,.05), 6px 6px 2px rgba(0,0,0,.12);
+    transform: translateY(-1px);
+}
+
+button:active {
+    background-color: rgba(30, 75, 105, 0.5);
+    box-shadow: 0 0 1px rgba(0,0,0,.05), 1px 1px 0px rgba(0,0,0,.08);
+    transform: translateY(3px) translateX(2px);
+    border-color: rgba(255, 255, 255, 0.6);
+}
+
+button.active {
+    background-color: rgba(30, 75, 105, 0.5);
+    box-shadow: 0 0 1px rgba(0,0,0,.05), 1px 1px 0px rgba(0,0,0,.08);
+    transform: translateY(3px) translateX(2px);
+    border-color: rgba(255, 255, 255, 0.6);
+}
+
+.contentContainer{
+    height: 90%;
+}
+
+.usersContainer{
+    height:100%;
+    width: 100%;
+    display: flex;
+}
+
+.usersList{
+    width: 55%;
+    height: 90%;
+}
+
+content{
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    border-radius: 32px;
+    padding: 30px;
+    box-shadow: 0 0 1px rgba(0,0,0,.05), 5px 5px 1px rgba(0,0,0,.1);
 }

@@ -51,6 +51,13 @@ func (s *Storage) initSchema() error {
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
+	CREATE TRIGGER IF NOT EXISTS update_proxy_routes_timestamp
+	AFTER UPDATE ON proxy_routes
+	FOR EACH ROW
+	BEGIN
+    	UPDATE proxy_routes SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
+	END;
+
 	CREATE INDEX IF NOT EXISTS idx_path ON proxy_routes(url);
 	CREATE INDEX IF NOT EXISTS idx_enabled ON proxy_routes(enabled);
 	`

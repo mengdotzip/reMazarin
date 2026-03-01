@@ -15,13 +15,16 @@ func (p *Proxy) startListeners() []*http.Server {
 
 	var listenServers []*http.Server
 	for _, listener := range p.servers {
-		server := p.startListener(listener)
+		server, err := p.startListener(listener)
+		if err != nil {
+			break
+		}
 		listenServers = append(listenServers, server)
 	}
 	return listenServers
 }
 
-func (p *Proxy) startListener(listener *listenServer) *http.Server {
+func (p *Proxy) startListener(listener *listenServer) (*http.Server, error) {
 	mux := http.NewServeMux()
 	server := &http.Server{
 		Addr:    ":" + listener.Port,
@@ -36,7 +39,7 @@ func (p *Proxy) startListener(listener *listenServer) *http.Server {
 				"error", err,
 			)
 			p.ErrChan <- xerrors.Newf("TLS config for port %s: %w", listener.Port, err)
-			return nil
+			return nil, xerrors.Newf("TLS config for port %s: %w", listener.Port, err)
 		}
 		server.TLSConfig = tlsConfig
 
@@ -49,7 +52,7 @@ func (p *Proxy) startListener(listener *listenServer) *http.Server {
 	mux.HandleFunc("/", p.route)
 	p.Wg.Add(1)
 	go p.startServe(server, listener.Tls)
-	return server
+	return server, nil
 }
 
 func (p *Proxy) startServe(server *http.Server, useTLS bool) {
