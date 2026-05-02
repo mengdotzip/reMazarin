@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -10,6 +11,10 @@ import (
 	"strings"
 	"time"
 )
+
+// OnRouteUpdate is called after a route's access control is changed so the
+// proxy cache can be refreshed immediately. Set this in main.go.
+var OnRouteUpdate func()
 
 var store *storage.Storage
 var authURL string
@@ -370,6 +375,10 @@ func HandleAdminGroups(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := store.DeleteGroup(r.Context(), id); err != nil {
+			if errors.Is(err, storage.ErrGroupProtected) {
+				fail(w, http.StatusBadRequest, "cannot delete the admin group")
+				return
+			}
 			fail(w, http.StatusNotFound, "group not found")
 			return
 		}
@@ -470,6 +479,9 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		if err := store.UpdateRouteAccess(r.Context(), id, body.AllowedGroups, body.CookiePolicy, body.RenewOnAccess); err != nil {
 			fail(w, http.StatusNotFound, "route not found")
 			return
+		}
+		if OnRouteUpdate != nil {
+			OnRouteUpdate()
 		}
 		ok(w, map[string]bool{"ok": true})
 

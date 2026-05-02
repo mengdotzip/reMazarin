@@ -202,12 +202,17 @@ async function loadGroups() {
     allGroups.forEach(g => {
         const el = document.createElement('div');
         el.className = 'item';
+        const delBtn = g.name === 'admin'
+            ? `<span class="tag" title="Protected system group" style="opacity:.5;cursor:default">protected</span>`
+            : `<button class="delBtn" title="Delete">×</button>`;
         el.innerHTML = `
             <div class="itemMain">${g.name}</div>
             <div class="itemSub">${g.description || ''}</div>
-            <button class="delBtn" title="Delete">×</button>
+            ${delBtn}
         `;
-        el.querySelector('.delBtn').addEventListener('click', () => deleteGroup(g.id, g.name));
+        if (g.name !== 'admin') {
+            el.querySelector('.delBtn').addEventListener('click', () => deleteGroup(g.id, g.name));
+        }
         list.appendChild(el);
     });
 }

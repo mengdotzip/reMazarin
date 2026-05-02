@@ -51,6 +51,8 @@ On first run the database is seeded with:
 
 Routes with no groups assigned are **public**. Routes with one or more groups require the visitor to be logged in and a member of at least one of those groups.
 
+Access control changes take effect **immediately** — no restart needed. See [docs/concepts.md](docs/concepts.md) for details on cookie policies, the admin group, and how the route cache works.
+
 ## Custom API handlers
 
 Add your own API functions in `api/api.go` inside `InitApi()`:

@@ -2,11 +2,15 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/mdobak/go-xerrors"
 )
+
+// ErrGroupProtected is returned when attempting to delete a system group.
+var ErrGroupProtected = errors.New("cannot delete protected group")
 
 type Group struct {
 	ID          int       `json:"id"`
@@ -48,6 +52,13 @@ func (s *Storage) GetAllGroups(ctx context.Context) ([]Group, error) {
 }
 
 func (s *Storage) DeleteGroup(ctx context.Context, id int) error {
+	var name string
+	if err := s.db.QueryRowContext(ctx, `SELECT name FROM groups WHERE id = ?`, id).Scan(&name); err != nil {
+		return xerrors.Newf("group not found")
+	}
+	if name == "admin" {
+		return ErrGroupProtected
+	}
 	result, err := s.db.ExecContext(ctx, `DELETE FROM groups WHERE id = ?`, id)
 	if err != nil {
 		return xerrors.Newf("delete group: %w", err)

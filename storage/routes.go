@@ -142,6 +142,25 @@ func (s *Storage) UpdateRouteAccess(ctx context.Context, id int, allowedGroups, 
 	return nil
 }
 
+// EnsureRouteGroup sets the allowed_groups for the given route URL to the
+// named group's ID, but only if allowed_groups is currently empty. This is used
+// at startup to protect system routes (e.g. the admin panel) without overriding
+// any admin-configured access control.
+func (s *Storage) EnsureRouteGroup(ctx context.Context, routeURL, groupName string) error {
+	var groupID int
+	if err := s.db.QueryRowContext(ctx, `SELECT id FROM groups WHERE name = ?`, groupName).Scan(&groupID); err != nil {
+		return xerrors.Newf("group %q not found: %w", groupName, err)
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE proxy_routes SET allowed_groups = ?
+		WHERE url = ? AND (allowed_groups = '' OR allowed_groups IS NULL)`,
+		strconv.Itoa(groupID), routeURL)
+	if err != nil {
+		return xerrors.Newf("ensure route group: %w", err)
+	}
+	return nil
+}
+
 // RouteAllows returns true if the given group IDs satisfy the route's allowed_groups.
 // An empty allowed_groups string means the route is public.
 func RouteAllows(allowedGroups string, groupIDs []int) bool {

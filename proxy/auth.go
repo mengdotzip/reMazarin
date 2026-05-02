@@ -35,6 +35,10 @@ func InitAuth(s *storage.Storage) {
 	}()
 }
 
+// RefreshCache forces an immediate reload of the route/auth cache from the database.
+// Call this after any route access-control update that should take effect right away.
+func RefreshCache() { refreshCache() }
+
 func refreshCache() {
 	routes, err := authStore.GetAllRoutes(context.Background())
 	if err != nil {

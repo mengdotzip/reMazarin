@@ -94,6 +94,19 @@ func run() error {
 		return xerrors.Newf("sync routes: %w", err)
 	}
 
+	// Protect the admin route with the admin group on first creation.
+	// EnsureRouteGroup is a no-op if allowed_groups has already been configured.
+	if cfg.Admin.Enabled {
+		if err := store.EnsureRouteGroup(context.Background(), cfg.Admin.Url, "admin"); err != nil {
+			slog.Warn("could not protect admin route", "error", err)
+		}
+	}
+
+	// Refresh the auth cache now that routes are synced and protected.
+	// (InitAuth ran before SyncRoutes so the initial cache load was empty.)
+	proxy.RefreshCache()
+	api.OnRouteUpdate = proxy.RefreshCache
+
 	allRoutes, err := store.GetAllRoutes(context.Background())
 	if err != nil {
 		return xerrors.Newf("get routes: %w", err)
