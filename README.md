@@ -60,7 +60,7 @@ Routes with no groups and no IPs assigned are **public**. Routes can be restrict
 - **Group membership** — visitor must be logged in and a member of at least one allowed group.
 - **IP allowlist** — a matching client IP grants access without a session (plain IPs or CIDR ranges, comma-separated). For TCP routes, non-matching IPs have their connection closed immediately.
 
-Access control changes take effect **immediately** — no restart needed. See [docs/concepts.md](docs/concepts.md) for details on cookie policies, the admin group, and how the route cache works.
+Access control changes take effect **immediately** — no restart needed. See [docs/concepts.md](docs/concepts.md) for details on cookie policies, IP session auth, the admin group, and how the route cache works.
 
 ## Custom API handlers
 
@@ -80,6 +80,12 @@ url    = "api.example.com:443"
 target = "myfunction"
 type   = "api"
 ```
+
+## Database migrations
+
+Schema changes are managed through numbered SQL files in `storage/migrations/`, embedded into the binary at compile time. On startup, reMazarin automatically applies any unapplied migrations. Existing databases are bootstrapped transparently — no manual steps needed when upgrading.
+
+See [docs/migrations.md](docs/migrations.md) for the migration history and instructions for adding new migrations.
 
 ## Registration
 

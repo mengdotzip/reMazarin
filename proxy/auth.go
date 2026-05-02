@@ -69,20 +69,43 @@ func withAuth(next http.Handler) http.Handler {
 		cacheMu.RUnlock()
 
 		// Public: no restrictions at all.
-		if !found || (route.AllowedGroups == "" && route.AllowedIPs == "") {
+		if !found || (!route.IPAuth && route.AllowedGroups == "" && route.AllowedIPs == "") {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// IP allowlist: a matching IP grants access without a session.
-		if route.AllowedIPs != "" && ipAllows(route.AllowedIPs, extractClientIP(r)) {
+		clientIP := extractClientIP(r)
+
+		// IP session auth: connecting IP has an active session → grant access.
+		// If allowed_groups is also set, the session user must be in one of those groups.
+		if route.IPAuth {
+			if sess, err := authStore.ValidateSessionByIP(r.Context(), clientIP); err == nil {
+				authorized := route.AllowedGroups == ""
+				if !authorized {
+					if groups, err := authStore.GetUserGroups(r.Context(), sess.UserID); err == nil {
+						authorized = groupsAllow(route.AllowedGroups, groups)
+					}
+				}
+				if authorized {
+					if route.RenewOnAccess {
+						authStore.ExtendSessionByID(r.Context(), sess.ID, 7*24*time.Hour)
+					}
+					next.ServeHTTP(w, r)
+					return
+				}
+				// Session found but user not in required group — fall through to other methods.
+			}
+			// No active session for this IP — fall through.
+		}
+
+		// Static IP allowlist: matching IP grants access without a session.
+		if route.AllowedIPs != "" && ipAllows(route.AllowedIPs, clientIP) {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// Group-based auth: need a valid session.
+		// Cookie-based group auth.
 		if route.AllowedGroups == "" {
-			// IP auth configured but this IP doesn't match — deny.
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}

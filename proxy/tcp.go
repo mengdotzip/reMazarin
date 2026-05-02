@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/mdobak/go-xerrors"
 )
@@ -85,13 +86,34 @@ func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUr
 	defer clientConn.Close()
 	clientIP, _, _ := net.SplitHostPort(clientConn.RemoteAddr().String())
 
-	// IP allowlist check.
 	cacheMu.RLock()
 	route, found := cache[routeUrl]
 	cacheMu.RUnlock()
-	if found && route.AllowedIPs != "" {
-		if !ipAllows(route.AllowedIPs, clientIP) {
-			slog.Warn("tcp: connection rejected by IP policy", "client", clientIP, "route", routeUrl)
+
+	if found && (route.IPAuth || route.AllowedIPs != "") {
+		authorized := false
+
+		// IP session auth: connecting IP must have an active session.
+		if route.IPAuth && authStore != nil {
+			if sess, err := authStore.ValidateSessionByIP(context.Background(), clientIP); err == nil {
+				if route.AllowedGroups == "" {
+					authorized = true
+				} else if groups, err := authStore.GetUserGroups(context.Background(), sess.UserID); err == nil {
+					authorized = groupsAllow(route.AllowedGroups, groups)
+				}
+				if authorized && route.RenewOnAccess {
+					authStore.ExtendSessionByID(context.Background(), sess.ID, 7*24*time.Hour)
+				}
+			}
+		}
+
+		// Static IP allowlist fallback.
+		if !authorized && route.AllowedIPs != "" {
+			authorized = ipAllows(route.AllowedIPs, clientIP)
+		}
+
+		if !authorized {
+			slog.Warn("tcp: connection rejected, not authorized", "client", clientIP, "route", routeUrl)
 			return
 		}
 	}

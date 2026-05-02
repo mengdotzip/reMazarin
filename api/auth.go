@@ -143,7 +143,8 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	tok, err := store.CreateSession(r.Context(), user.ID, sessionDur)
+	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	tok, err := store.CreateSession(r.Context(), user.ID, sessionDur, clientIP)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "session error")
 		return
@@ -506,6 +507,7 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			AllowedGroups string `json:"allowed_groups"`
 			AllowedIPs    string `json:"allowed_ips"`
+			IPAuth        bool   `json:"ip_auth"`
 			CookiePolicy  string `json:"cookie_policy"`
 			RenewOnAccess bool   `json:"renew_on_access"`
 			Target        string `json:"target"`
@@ -517,7 +519,7 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		if body.CookiePolicy == "" {
 			body.CookiePolicy = "persistent"
 		}
-		if err := store.UpdateRouteAccess(r.Context(), id, body.AllowedGroups, body.AllowedIPs, body.CookiePolicy, body.RenewOnAccess); err != nil {
+		if err := store.UpdateRouteAccess(r.Context(), id, body.AllowedGroups, body.AllowedIPs, body.IPAuth, body.CookiePolicy, body.RenewOnAccess); err != nil {
 			fail(w, http.StatusNotFound, "route not found")
 			return
 		}

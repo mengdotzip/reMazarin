@@ -28,6 +28,44 @@ Each route can have an independent cookie policy that controls how long the sess
 
 **Renew on access** — when enabled, every successful request extends the session by another 7 days, so active users never get logged out.
 
+## IP session auth
+
+Enabling **IP session auth** on a route lets the connecting IP address act as the credential — no session cookie required. When a user logs into the web portal, their IP is stored with the session. Any subsequent connection from that same IP to a route with IP session auth enabled is automatically granted access.
+
+This is the primary auth mechanism for TCP routes (SSH, etc.) since raw TCP cannot carry cookies.
+
+**Auth precedence** (first match wins):
+
+| Check | Condition |
+|---|---|
+| 1. IP session auth | `ip_auth` enabled and connecting IP has an active login session |
+| 2. Static IP allowlist | `allowed_ips` is set and the IP matches |
+| 3. Cookie auth | `allowed_groups` is set and the request carries a valid session cookie |
+
+If none match, the request/connection is rejected.
+
+**Group restriction with IP session auth** — if `allowed_groups` is also configured, the session found by IP must belong to a user in one of those groups. This lets you restrict IP session auth to specific teams (e.g. only users in the `devs` group can SSH through the TCP proxy).
+
+**Static IP allowlist** (`allowed_ips`) is a separate, simpler mechanism: specific IPs or CIDR ranges that are always allowed regardless of whether they have an active session. Useful for trusted servers or CI/CD runners.
+
+### Session lifetime and cleanup
+
+The IP association lives for as long as the underlying session is valid — **7 days** from login by default, the same expiry that controls the cookie. There is no separate IP-specific timer.
+
+Sessions are cleaned up automatically every 5 minutes. Once a session expires, the associated IP immediately loses access to any IP-auth-protected route on the next connection attempt (TCP) or request (HTTP).
+
+**Logout** — when the user logs out via the web portal, the session is deleted immediately. This revokes access from their IP address right away; there is no grace period.
+
+**Multiple devices / IPs** — each login creates an independent session. A user who logs in from two different IP addresses has two sessions. Each session tracks its own IP and expiry independently.
+
+### Renew on access
+
+The **Renew on access** toggle works with IP session auth. When a connection authenticates via IP session auth and the route has renew on access enabled, the session expiry is extended by 7 days — the same behaviour as cookie auth. For TCP routes, renewal happens once per new connection (not once per packet). For HTTP routes, it happens on every successfully authenticated request.
+
+This means a user who regularly SSHs through an IP-auth TCP route never gets logged out, as long as they connect within 7 days of their last access.
+
+**Note on proxied deployments** — both mechanisms use the direct TCP connection's remote address. If reMazarin sits behind another load balancer or proxy, the IP seen is that proxy's address, not the end user's.
+
 ## Registration and invites
 
 New users can only register with a valid invite code generated in the admin panel. Invite codes are time-limited (default 24 hours) and can only be used once.

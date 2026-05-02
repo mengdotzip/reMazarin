@@ -15,20 +15,20 @@ type Session struct {
 	CreatedAt time.Time
 }
 
-// CreateSession generates a secure random token, stores its hash, and returns the
-// plaintext token (to be given to the client as a cookie).
-func (s *Storage) CreateSession(ctx context.Context, userID int, dur time.Duration) (string, error) {
+// CreateSession generates a secure random token, stores its hash alongside the
+// client IP, and returns the plaintext token (to be given to the client as a cookie).
+func (s *Storage) CreateSession(ctx context.Context, userID int, dur time.Duration, clientIP string) (string, error) {
 	tok := randHex(32)
 	hash := sha256hex(tok)
 	exp := time.Now().Add(dur)
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)`,
-		hash, userID, exp)
+		`INSERT INTO sessions (token_hash, user_id, client_ip, expires_at) VALUES (?, ?, ?, ?)`,
+		hash, userID, clientIP, exp)
 	if err != nil {
 		return "", xerrors.Newf("create session: %w", err)
 	}
-	slog.Info("session created", "user_id", userID)
+	slog.Info("session created", "user_id", userID, "client_ip", clientIP)
 	return tok, nil
 }
 
@@ -47,6 +47,23 @@ func (s *Storage) ValidateSession(ctx context.Context, tok string) (*Session, er
 	return &sess, nil
 }
 
+// ValidateSessionByIP returns any active session whose client_ip matches the
+// given address. Used by IP-session auth to authenticate TCP connections and
+// cookie-less HTTP requests.
+func (s *Storage) ValidateSessionByIP(ctx context.Context, ip string) (*Session, error) {
+	var sess Session
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, user_id, expires_at, created_at FROM sessions
+		 WHERE client_ip = ? AND expires_at > ?
+		 ORDER BY expires_at DESC LIMIT 1`,
+		ip, time.Now(),
+	).Scan(&sess.ID, &sess.UserID, &sess.ExpiresAt, &sess.CreatedAt)
+	if err != nil {
+		return nil, xerrors.Newf("no active session for IP")
+	}
+	return &sess, nil
+}
+
 func (s *Storage) DeleteSession(ctx context.Context, tok string) error {
 	hash := sha256hex(tok)
 	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ?`, hash)
@@ -57,6 +74,13 @@ func (s *Storage) ExtendSession(ctx context.Context, tok string, dur time.Durati
 	hash := sha256hex(tok)
 	exp := time.Now().Add(dur)
 	s.db.ExecContext(ctx, `UPDATE sessions SET expires_at = ? WHERE token_hash = ?`, exp, hash)
+}
+
+// ExtendSessionByID extends a session by its primary key. Used by IP session
+// auth where the token is not available.
+func (s *Storage) ExtendSessionByID(ctx context.Context, id int, dur time.Duration) {
+	exp := time.Now().Add(dur)
+	s.db.ExecContext(ctx, `UPDATE sessions SET expires_at = ? WHERE id = ?`, exp, id)
 }
 
 func (s *Storage) CleanupExpiredSessions(ctx context.Context) {

@@ -5,12 +5,19 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"embed"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 
 	"github.com/mdobak/go-xerrors"
 	_ "modernc.org/sqlite"
 )
+
+//go:embed migrations/*.sql
+var migrationFS embed.FS
 
 type Storage struct {
 	db *sql.DB
@@ -30,101 +37,174 @@ func New(path string) (*Storage, error) {
 
 	s := &Storage{db: db}
 
-	if err := s.initSchema(); err != nil {
+	if err := s.runMigrations(); err != nil {
 		db.Close()
-		return nil, xerrors.Newf("init schema: %w", err)
+		return nil, xerrors.Newf("run migrations: %w", err)
 	}
 
-	s.migrate()
 	s.seedAdmin()
-
 	return s, nil
 }
 
-func (s *Storage) initSchema() error {
-	_, err := s.db.Exec(`
-	CREATE TABLE IF NOT EXISTS proxy_routes (
-		id            INTEGER PRIMARY KEY AUTOINCREMENT,
-		url           TEXT NOT NULL UNIQUE,
-		target        TEXT NOT NULL,
-		type          TEXT DEFAULT 'proxy',
-		tls           BOOLEAN DEFAULT FALSE,
-		cert          TEXT DEFAULT '',
-		key           TEXT DEFAULT '',
-		enabled       BOOLEAN DEFAULT TRUE,
-		source        TEXT NOT NULL,
-		allowed_groups TEXT DEFAULT '',
-		cookie_policy TEXT DEFAULT 'persistent',
-		renew_on_access BOOLEAN DEFAULT FALSE,
-		allowed_ips TEXT DEFAULT '',
-		created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
-		updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-
-	CREATE TRIGGER IF NOT EXISTS proxy_routes_updated
-	AFTER UPDATE ON proxy_routes FOR EACH ROW
-	BEGIN
-		UPDATE proxy_routes SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
-	END;
-
-	CREATE INDEX IF NOT EXISTS idx_routes_url     ON proxy_routes(url);
-	CREATE INDEX IF NOT EXISTS idx_routes_enabled ON proxy_routes(enabled);
-
-	CREATE TABLE IF NOT EXISTS users (
-		id            INTEGER PRIMARY KEY AUTOINCREMENT,
-		username      TEXT NOT NULL UNIQUE,
-		password_hash TEXT NOT NULL,
-		created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-
-	CREATE TABLE IF NOT EXISTS groups (
-		id          INTEGER PRIMARY KEY AUTOINCREMENT,
-		name        TEXT NOT NULL UNIQUE,
-		description TEXT DEFAULT '',
-		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-
-	CREATE TABLE IF NOT EXISTS user_groups (
-		user_id  INTEGER NOT NULL REFERENCES users(id)  ON DELETE CASCADE,
-		group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-		PRIMARY KEY (user_id, group_id)
-	);
-
-	CREATE TABLE IF NOT EXISTS invites (
-		id         INTEGER PRIMARY KEY AUTOINCREMENT,
-		code_hash  TEXT NOT NULL UNIQUE,
-		used       BOOLEAN DEFAULT FALSE,
-		expires_at DATETIME NOT NULL,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-
-	CREATE TABLE IF NOT EXISTS sessions (
-		id         INTEGER PRIMARY KEY AUTOINCREMENT,
-		token_hash TEXT NOT NULL UNIQUE,
-		user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-		expires_at DATETIME NOT NULL,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash);
-	`)
-	if err != nil {
-		return xerrors.Newf("init schema: %w", err)
+// runMigrations applies any unapplied numbered SQL migrations from the
+// embedded migrations/ directory.
+func (s *Storage) runMigrations() error {
+	// The tracking table is the only thing we create outside of a migration file.
+	if _, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    INTEGER  PRIMARY KEY,
+			name       TEXT     NOT NULL,
+			applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`); err != nil {
+		return xerrors.Newf("create schema_migrations: %w", err)
 	}
-	slog.Info("database schema initialized")
+
+	// For databases created before the migration system existed, detect which
+	// migrations are already applied by inspecting column presence.
+	if err := s.bootstrapMigrations(); err != nil {
+		return xerrors.Newf("bootstrap migrations: %w", err)
+	}
+
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		return xerrors.Newf("read migrations dir: %w", err)
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".sql") {
+			continue
+		}
+
+		// Filename format: NNN_description.sql
+		version, err := strconv.Atoi(strings.SplitN(name, "_", 2)[0])
+		if err != nil {
+			slog.Warn("migration skipped: unparseable version", "file", name)
+			continue
+		}
+
+		var applied bool
+		s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?)`, version).Scan(&applied)
+		if applied {
+			continue
+		}
+
+		sql, err := migrationFS.ReadFile("migrations/" + name)
+		if err != nil {
+			return xerrors.Newf("read migration %s: %w", name, err)
+		}
+
+		// Run each statement in the file individually so SQLite can handle them.
+		for _, stmt := range splitSQL(string(sql)) {
+			if _, err := s.db.Exec(stmt); err != nil {
+				return xerrors.Newf("apply migration %s: %w", name, err)
+			}
+		}
+
+		if _, err := s.db.Exec(
+			`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, version, name,
+		); err != nil {
+			return xerrors.Newf("record migration %s: %w", name, err)
+		}
+		slog.Info("applied migration", "version", version, "name", name)
+	}
+
 	return nil
 }
 
-// migrate adds columns to existing databases that predate the current schema.
-func (s *Storage) migrate() {
-	for _, stmt := range []string{
-		`ALTER TABLE proxy_routes ADD COLUMN allowed_groups  TEXT DEFAULT ''`,
-		`ALTER TABLE proxy_routes ADD COLUMN cookie_policy   TEXT DEFAULT 'persistent'`,
-		`ALTER TABLE proxy_routes ADD COLUMN renew_on_access BOOLEAN DEFAULT FALSE`,
-		`ALTER TABLE proxy_routes ADD COLUMN allowed_ips TEXT DEFAULT ''`,
-	} {
-		s.db.Exec(stmt) // intentionally ignore "column already exists" errors
+// bootstrapMigrations marks migrations as applied for databases that were
+// created before the migration system existed, using column presence as a
+// proxy for which changes have already been made.
+func (s *Storage) bootstrapMigrations() error {
+	var count int
+	s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count)
+	if count > 0 {
+		return nil // Already bootstrapped or on a freshly migrated DB.
 	}
+
+	// If proxy_routes doesn't exist this is a brand-new DB — let migrations run.
+	var tableExists int
+	s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='proxy_routes'`).Scan(&tableExists)
+	if tableExists == 0 {
+		return nil
+	}
+
+	// Old DB: infer applied versions from column presence.
+	checks := []struct {
+		version int
+		name    string
+		applied bool
+	}{
+		{1, "001_initial_schema.sql", true}, // proxy_routes exists → 001 applied
+		{2, "002_access_control.sql", s.columnExists("proxy_routes", "allowed_groups")},
+		{3, "003_allowed_ips.sql", s.columnExists("proxy_routes", "allowed_ips")},
+		{4, "004_ip_session_auth.sql", s.columnExists("proxy_routes", "ip_auth")},
+	}
+
+	for _, c := range checks {
+		if !c.applied {
+			continue
+		}
+		if _, err := s.db.Exec(
+			`INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (?, ?)`,
+			c.version, c.name,
+		); err != nil {
+			return xerrors.Newf("bootstrap v%d: %w", c.version, err)
+		}
+	}
+
+	slog.Info("bootstrapped migration tracking from existing schema")
+	return nil
+}
+
+// columnExists reports whether the given column is present in the given table.
+func (s *Storage) columnExists(table, column string) bool {
+	rows, err := s.db.Query(fmt.Sprintf(`PRAGMA table_info("%s")`, table))
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dfltVal sql.NullString
+		var pk int
+		rows.Scan(&cid, &name, &colType, &notNull, &dfltVal, &pk)
+		if name == column {
+			return true
+		}
+	}
+	return false
+}
+
+// splitSQL splits a SQL script into individual statements, correctly handling
+// SQLite trigger bodies (BEGIN...END blocks) that contain semicolons.
+func splitSQL(s string) []string {
+	var stmts []string
+	var buf strings.Builder
+	depth := 0
+
+	for _, line := range strings.Split(s, "\n") {
+		upper := strings.ToUpper(strings.TrimSpace(line))
+		if upper == "BEGIN" {
+			depth++
+		} else if upper == "END" || upper == "END;" {
+			depth--
+		}
+		buf.WriteString(line)
+		buf.WriteString("\n")
+		if depth == 0 && strings.HasSuffix(strings.TrimSpace(line), ";") {
+			if stmt := strings.TrimSpace(buf.String()); stmt != "" && stmt != ";" {
+				stmts = append(stmts, stmt)
+			}
+			buf.Reset()
+		}
+	}
+	if stmt := strings.TrimSpace(buf.String()); stmt != "" {
+		stmts = append(stmts, stmt)
+	}
+	return stmts
 }
 
 // seedAdmin creates the default admin user and group on first run.

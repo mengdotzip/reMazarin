@@ -308,50 +308,51 @@ function buildRouteEditPanel(route, groups) {
         </div>
     ` : '';
 
-    let authRows = '';
-    if (!isTcp) {
-        const selectedIds = new Set(route.allowed_groups.split(',').map(s => s.trim()).filter(Boolean));
-        const checkboxes = groups.map(g => `
-            <label class="groupCheck">
-                <input type="checkbox" value="${g.id}" ${selectedIds.has(String(g.id)) ? 'checked' : ''}>
-                ${g.name}
-            </label>
-        `).join('');
-        authRows = `
-            <div class="routeEditRow">
-                <label>Allowed IPs</label>
-                <input type="text" class="ipsInput" value="${route.allowed_ips || ''}" placeholder="10.0.0.1, 192.168.0.0/24">
-            </div>
-            <div class="routeEditRow">
-                <label>Allowed groups</label>
-                <div class="groupCheckList">${checkboxes || '<em style="font-size:11px;color:#888">No groups yet</em>'}</div>
-            </div>
-            <div class="routeEditRow">
-                <label>Cookie policy</label>
-                <select>
-                    <option value="persistent" ${route.cookie_policy === 'persistent' ? 'selected' : ''}>Persistent (7 days)</option>
-                    <option value="session"    ${route.cookie_policy === 'session'    ? 'selected' : ''}>Session only</option>
-                    <option value="none"       ${route.cookie_policy === 'none'       ? 'selected' : ''}>None</option>
-                </select>
-            </div>
-            <div class="routeEditRow">
-                <label>Renew on access</label>
-                <input type="checkbox" class="renewCheck" ${route.renew_on_access ? 'checked' : ''}>
-            </div>
-        `;
-    } else {
-        authRows = `
-            <div class="routeEditRow">
-                <label>Allowed IPs</label>
-                <input type="text" class="ipsInput" value="${route.allowed_ips || ''}" placeholder="10.0.0.1, 192.168.0.0/24">
-            </div>
-            <div class="routeEditRow" style="color:#888;font-size:11px;font-style:italic;padding-left:118px">Session auth does not apply to TCP routes.</div>
-        `;
-    }
+    const selectedIds = new Set((route.allowed_groups || '').split(',').map(s => s.trim()).filter(Boolean));
+    const checkboxes = groups.map(g => `
+        <label class="groupCheck">
+            <input type="checkbox" value="${g.id}" ${selectedIds.has(String(g.id)) ? 'checked' : ''}>
+            ${g.name}
+        </label>
+    `).join('');
+
+    // IP session auth + static allowlist rows (shown for all route types).
+    const ipAuthRows = `
+        <div class="routeEditRow">
+            <label>IP session auth</label>
+            <input type="checkbox" class="ipAuthCheck" ${route.ip_auth ? 'checked' : ''}>
+            <span style="font-size:11px;color:#888">grant access if the connecting IP has an active login session</span>
+        </div>
+        <div class="routeEditRow">
+            <label>Allowed groups</label>
+            <div class="groupCheckList">${checkboxes || '<em style="font-size:11px;color:#888">No groups yet</em>'}</div>
+        </div>
+        <div class="routeEditRow">
+            <label>Allowed IPs</label>
+            <input type="text" class="ipsInput" value="${route.allowed_ips || ''}" placeholder="10.0.0.1, 192.168.0.0/24">
+        </div>
+    `;
+
+    // Cookie policy rows (HTTP routes only).
+    const cookieRows = !isTcp ? `
+        <div class="routeEditRow">
+            <label>Cookie policy</label>
+            <select>
+                <option value="persistent" ${route.cookie_policy === 'persistent' ? 'selected' : ''}>Persistent (7 days)</option>
+                <option value="session"    ${route.cookie_policy === 'session'    ? 'selected' : ''}>Session only</option>
+                <option value="none"       ${route.cookie_policy === 'none'       ? 'selected' : ''}>None</option>
+            </select>
+        </div>
+        <div class="routeEditRow">
+            <label>Renew on access</label>
+            <input type="checkbox" class="renewCheck" ${route.renew_on_access ? 'checked' : ''}>
+        </div>
+    ` : `<div class="routeEditRow" style="color:#888;font-size:11px;font-style:italic;padding-left:118px">Cookie auth not available for TCP routes.</div>`;
 
     panel.innerHTML = `
         ${targetRow}
-        ${authRows}
+        ${ipAuthRows}
+        ${cookieRows}
         <div class="routeEditActions">
             <button onclick="this.closest('.routeEdit').style.display='none'">Cancel</button>
             <button class="saveBtn">Save</button>
@@ -359,12 +360,13 @@ function buildRouteEditPanel(route, groups) {
     `;
 
     panel.querySelector('.saveBtn').addEventListener('click', async () => {
+        const checked = [...panel.querySelectorAll('.groupCheckList input:checked')].map(el => el.value);
         const body = {
+            ip_auth:     panel.querySelector('.ipAuthCheck').checked,
+            allowed_groups: checked.join(','),
             allowed_ips: (panel.querySelector('.ipsInput')?.value || '').trim(),
         };
         if (!isTcp) {
-            const checked = [...panel.querySelectorAll('.groupCheckList input:checked')].map(el => el.value);
-            body.allowed_groups  = checked.join(',');
             body.cookie_policy   = panel.querySelector('select').value;
             body.renew_on_access = panel.querySelector('.renewCheck').checked;
         }
