@@ -32,9 +32,10 @@ type AdminConfig struct {
 }
 
 type OtelConfig struct {
-	Enabled  bool   `toml:"enabled"`
-	Endpoint string `toml:"endpoint"`
-	Interval int    `toml:"interval"`
+	Enabled         bool   `toml:"enabled"`
+	Endpoint        string `toml:"endpoint"`
+	Interval        int    `toml:"interval"`         // metric export interval, seconds (default 15)
+	RuntimeInterval int    `toml:"runtime_interval"` // Go runtime memstats read interval, seconds (default 30)
 }
 
 type Route struct {
@@ -76,6 +77,13 @@ func validateConfig(cfg *Config) {
 	}
 	if cfg.Admin.Target == "" {
 		cfg.Admin.Target = "./www/admin"
+	}
+
+	if cfg.Otel.Interval <= 0 {
+		cfg.Otel.Interval = 15
+	}
+	if cfg.Otel.RuntimeInterval <= 0 {
+		cfg.Otel.RuntimeInterval = 30
 	}
 }
 

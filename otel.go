@@ -64,9 +64,8 @@ func setupOTelSDK(ctx context.Context, cfg *Config) (shutdown func(context.Conte
 	tracerProvider := trace.NewTracerProvider(
 		trace.WithResource(res),
 		trace.WithBatcher(traceExporter,
-			trace.WithBatchTimeout(time.Duration(config.Otel.Interval)),
+			trace.WithBatchTimeout(time.Duration(config.Otel.Interval)*time.Second),
 		),
-
 		trace.WithSampler(trace.TraceIDRatioBased(0.1)),
 	)
 	shutdownFuncs = append(shutdownFuncs, tracerProvider.Shutdown)
@@ -86,7 +85,7 @@ func setupOTelSDK(ctx context.Context, cfg *Config) (shutdown func(context.Conte
 		metric.WithResource(res),
 		metric.WithReader(
 			metric.NewPeriodicReader(metricExporter,
-				metric.WithInterval(time.Duration(config.Otel.Interval)), // matches prometheus scrape_interval
+				metric.WithInterval(time.Duration(config.Otel.Interval)*time.Second),
 			),
 		),
 	)

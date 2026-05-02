@@ -57,7 +57,7 @@ func run() error {
 		defer func() {
 			err = xerrors.Newf("otel shutdown: %w", errors.Join(err, otelShutdown(context.Background())))
 		}()
-		if err := runtime.Start(runtime.WithMinimumReadMemStatsInterval(30 * time.Second)); err != nil {
+		if err := runtime.Start(runtime.WithMinimumReadMemStatsInterval(time.Duration(cfg.Otel.RuntimeInterval) * time.Second)); err != nil {
 			slog.Error("otel runtime start failed", "error", err)
 		}
 	}

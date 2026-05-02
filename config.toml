@@ -17,7 +17,8 @@ key = "./certs/private.key"
 [otel]
 enabled = true
 endpoint = "10.0.10.184:4317"
-interval = 15
+interval = 15          # metric export + trace batch interval, seconds
+runtime_interval = 30  # Go runtime memstats read interval, seconds
 
 [[routes]]
 url = "test.meng.zip:6789"
