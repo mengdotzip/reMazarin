@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sqlite3 /home/lucifer/shared-code/reMazarin/remazarin.db \"SELECT url, target, allowed_groups, source FROM proxy_routes;\")",
+      "Bash(go build *)"
+    ]
+  }
+}

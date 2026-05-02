@@ -9,12 +9,14 @@
 <body>
     <div class="container">
       <h1 class="headerText">REGISTER</h1>
-      <form id="authForm" class="formContainer" method="POST" action="/sse">
+      <form id="authForm" class="formContainer">
         <input type="text" id="username" name="username" placeholder="Enter your username" required />
         <input type="password" id="password" name="password" placeholder="Enter your password" required />
-        <input type="text" id="key" name="invite" placeholder="Enter your invite" required />
+        <input type="text" id="key" name="invite" placeholder="Enter your invite code" required />
+        <p id="errorMsg" class="errorMsg"></p>
         <button type="submit">Register</button>
       </form>
     </div>
+<script src="script.js"></script>
 </body>
 </html>

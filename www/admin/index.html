@@ -7,26 +7,98 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="container">
-      <div class="menuContainer">
-        <button>METRICS</button>
-        <button>USERS</button>
-        <button>FIREWALL</button>
-        <button>ROUTES</button>
-        <button>ABOUT</button>
-      </div>
-      <div class="contentContainer">
+  <div class="container">
 
-        <div class="usersContainer">
-          <content class="usersList"></content>
-          <content class="usersInvites"></content>
-          <content class="usersMore"></content>
-        </div>
-
-      </div>
+    <div class="menuContainer">
+      <button data-view="users" class="active">USERS</button>
+      <button data-view="routes">ROUTES</button>
     </div>
 
-<script src="script.js"></script>
+    <div class="contentContainer">
 
+      <!-- ── USERS VIEW ─────────────────────────────────────────────────────── -->
+      <div class="view active" id="view-users">
+        <div class="usersContainer">
+
+          <content class="usersList" id="panel-users">
+            <div class="panelHeader">
+              <span class="panelTitle">Users</span>
+            </div>
+            <div id="userItems" class="itemList"></div>
+          </content>
+
+          <content class="usersInvites" id="panel-invites">
+            <div class="panelHeader">
+              <span class="panelTitle">Invites</span>
+            </div>
+            <div class="createRow">
+              <input type="number" id="inviteHours" value="24" min="1" placeholder="hrs">
+              <button onclick="createInvite()">+ Create</button>
+            </div>
+            <div id="newInviteCode" class="inviteCode" style="display:none"></div>
+            <div id="inviteItems" class="itemList"></div>
+          </content>
+
+          <content class="usersMore" id="panel-groups">
+            <div id="groupsPanel">
+              <div class="panelHeader">
+                <span class="panelTitle">Groups</span>
+              </div>
+              <div class="createRow">
+                <input type="text" id="groupName" placeholder="Name">
+                <input type="text" id="groupDesc" placeholder="Description">
+                <button onclick="createGroup()">+ Create</button>
+              </div>
+              <div id="groupItems" class="itemList"></div>
+            </div>
+            <div id="userDetailPanel" style="display:none">
+              <div class="panelHeader">
+                <span class="panelTitle" id="userDetailName"></span>
+                <button class="iconBtn" onclick="clearUserSelection()" title="Back">←</button>
+              </div>
+              <div class="sectionLabel">Groups</div>
+              <div id="userGroupItems" class="itemList"></div>
+              <div class="createRow" style="margin-top:10px">
+                <select id="groupAssignSelect"><option value="">Add to group…</option></select>
+                <button onclick="addUserToGroup()">Add</button>
+              </div>
+            </div>
+          </content>
+
+        </div>
+      </div>
+
+      <!-- ── ROUTES VIEW ────────────────────────────────────────────────────── -->
+      <div class="view" id="view-routes">
+        <div class="routesContainer">
+          <content class="routesList">
+            <div class="panelHeader">
+              <span class="panelTitle">Routes</span>
+              <span class="hint">Click Edit to manage access or backend</span>
+            </div>
+            <div id="routeItems" class="itemList"></div>
+          </content>
+          <content class="routeAdd">
+            <div class="panelHeader">
+              <span class="panelTitle">Add Route</span>
+            </div>
+            <div class="createRow">
+              <input type="text" id="newRouteUrl" placeholder="host:port">
+            </div>
+            <div class="createRow">
+              <input type="text" id="newRouteTarget" placeholder="target (ip:port)">
+            </div>
+            <div class="createRow">
+              <button onclick="createRoute()" style="width:100%">+ Add</button>
+            </div>
+            <div id="newRouteMsg" style="display:none;font-size:11px;color:#666;margin-top:6px;padding:0 4px;"></div>
+          </content>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+<script src="script.js"></script>
 </body>
 </html>

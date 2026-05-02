@@ -38,7 +38,6 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Load config
 	cfg, err := loadConfig("config.toml")
 	if err != nil {
 		return xerrors.Newf("load config: %w", err)
@@ -46,111 +45,96 @@ func run() error {
 
 	slog.Info("config loaded",
 		"web_enabled", cfg.Web.Enabled,
-		"database", cfg.Database,
 		"admin_enabled", cfg.Admin.Enabled,
 		"routes_count", len(cfg.Routes),
 	)
 
-	// Set up OpenTelemetry. ----
-	otelShutdown, err := setupOTelSDK(ctx, cfg)
-	if err != nil {
-		return err
+	if cfg.Otel.Enabled {
+		otelShutdown, err := setupOTelSDK(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			err = xerrors.Newf("otel shutdown: %w", errors.Join(err, otelShutdown(context.Background())))
+		}()
+		if err := runtime.Start(runtime.WithMinimumReadMemStatsInterval(30 * time.Second)); err != nil {
+			slog.Error("otel runtime start failed", "error", err)
+		}
 	}
-	// Handle shutdown properly so nothing leaks.
-	defer func() {
-		err = xerrors.Newf("serve shutdown error (otel): %w", errors.Join(err, otelShutdown(context.Background())))
-	}()
 
-	if err := runtime.Start(
-		runtime.WithMinimumReadMemStatsInterval(time.Second),
-	); err != nil {
-		slog.Error("otel runtime metrics start failed", "error", err)
+	if err := api.InitBuiltin(); err != nil {
+		return xerrors.Newf("init builtin api: %w", err)
 	}
-	// --------
-
-	// Init api functions
 	if err := api.InitApi(); err != nil {
 		return xerrors.Newf("init api: %w", err)
 	}
 
-	// Init routes
-	var proxyRoutes []proxy.ProxyRoute
-	if cfg.Admin.Enabled || cfg.Web.Enabled {
-		// Initialize storage
-		store, err := storage.New(cfg.Database)
-		if err != nil {
-			return xerrors.Newf("initialize storage: %w", err)
-		}
-		defer store.Close()
+	store, err := storage.New(cfg.Database)
+	if err != nil {
+		return xerrors.Newf("open storage: %w", err)
+	}
+	defer store.Close()
 
-		// Sync toml to sqlite
-		configRoutes := make([]storage.ConfigRoute, len(cfg.Routes))
-		for i, r := range cfg.Routes {
-			configRoutes[i] = storage.ConfigRoute{
-				Url:    r.Url,
-				Target: r.Target,
-				Type:   r.Type,
-				Tls:    r.Tls,
-				Cert:   r.Cert,
-				Key:    r.Key,
-			}
-		}
+	api.SetStore(store)
+	scheme := "http"
+	if cfg.Web.Tls {
+		scheme = "https"
+	}
+	api.SetAuthURL(scheme + "://" + cfg.Web.Url)
+	proxy.InitAuth(store)
 
-		if err := store.SyncRoutes(configRoutes); err != nil {
-			return xerrors.Newf("sync routes: %w", err)
+	configRoutes := make([]storage.ConfigRoute, len(cfg.Routes))
+	for i, r := range cfg.Routes {
+		configRoutes[i] = storage.ConfigRoute{
+			Url: r.Url, Target: r.Target, Type: r.Type,
+			Tls: r.Tls, Cert: r.Cert, Key: r.Key,
 		}
+	}
+	if err := store.SyncRoutes(configRoutes); err != nil {
+		return xerrors.Newf("sync routes: %w", err)
+	}
 
-		// Get all routes
-		ctx := context.Background()
-		allRoutes, err := store.GetAllRoutes(ctx)
-		if err != nil {
-			return xerrors.Newf("get routes: %w", err)
-		}
-
-		proxyRoutes = make([]proxy.ProxyRoute, len(allRoutes))
-		for i, r := range allRoutes {
-			proxyRoutes[i] = proxy.ProxyRoute{
-				Url:    r.Url,
-				Target: r.Target,
-				Type:   r.Type,
-				Tls:    r.Tls,
-				Cert:   r.Cert,
-				Key:    r.Key,
-			}
-		}
-	} else {
-		proxyRoutes = make([]proxy.ProxyRoute, len(cfg.Routes))
-		for i, r := range cfg.Routes {
-			proxyRoutes[i] = proxy.ProxyRoute{
-				Url:    r.Url,
-				Target: r.Target,
-				Type:   r.Type,
-				Tls:    r.Tls,
-				Cert:   r.Cert,
-				Key:    r.Key,
-			}
+	// Protect the admin route with the admin group on first creation.
+	// EnsureRouteGroup is a no-op if allowed_groups has already been configured.
+	if cfg.Admin.Enabled {
+		if err := store.EnsureRouteGroup(context.Background(), cfg.Admin.Url, "admin"); err != nil {
+			slog.Warn("could not protect admin route", "error", err)
 		}
 	}
 
-	// Start proxies
+	// Refresh the auth cache now that routes are synced and protected.
+	// (InitAuth ran before SyncRoutes so the initial cache load was empty.)
+	proxy.RefreshCache()
+	api.OnRouteUpdate = proxy.RefreshCache
+
+	allRoutes, err := store.GetAllRoutes(context.Background())
+	if err != nil {
+		return xerrors.Newf("get routes: %w", err)
+	}
+	proxyRoutes := make([]proxy.ProxyRoute, len(allRoutes))
+	for i, r := range allRoutes {
+		proxyRoutes[i] = proxy.ProxyRoute{
+			Url: r.Url, Target: r.Target, Type: r.Type,
+			Tls: r.Tls, Cert: r.Cert, Key: r.Key,
+			InjectAPI: r.Url == cfg.Web.Url || r.Url == cfg.Admin.Url,
+		}
+	}
+
 	var wg sync.WaitGroup
-	proxy := proxy.Proxy{
-		Proxies: proxyRoutes,
-		Wg:      &wg,
-	}
+	p := proxy.Proxy{Proxies: proxyRoutes, Wg: &wg}
 
-	servers, err := proxy.StartProxy(cfg.Otel.Enabled)
+	// Wire dynamic route callbacks after p is initialised.
+	api.OnRouteRegister = func(url, target, routeType string) error {
+		return p.RegisterRoute(proxy.ProxyRoute{Url: url, Target: target, Type: routeType})
+	}
+	api.OnRouteDelete = func(url string) { p.UnregisterRoute(url) }
+
+	servers, err := p.StartProxy(cfg.Otel.Enabled)
 	if err != nil {
 		return xerrors.Newf("start proxy: %w", err)
 	}
 
-	// Shutdown wait
-	shtdwnErr := cleanShutdown(ctx, proxy.Wg, proxy.ErrChan, servers)
-	if shtdwnErr != nil {
-		return xerrors.Newf("clean shutdown error: %w", shtdwnErr)
-	}
-
-	return nil
+	return cleanShutdown(ctx, p.Wg, p.ErrChan, servers)
 }
 
 func cleanShutdown(ctx context.Context, wg *sync.WaitGroup, errChan chan error, servers []*http.Server) error {
@@ -161,33 +145,30 @@ func cleanShutdown(ctx context.Context, wg *sync.WaitGroup, errChan chan error, 
 	}()
 
 	var shutdownErr error
-
 	select {
 	case <-ctx.Done():
-		slog.Info("context cancelled")
+		slog.Info("context cancelled, shutting down")
 	case err := <-errChan:
-		slog.Error("listener failure detected, initiating shutdown", "error", err)
+		slog.Error("listener error, shutting down", "error", err)
 		shutdownErr = err
 	case <-done:
-		slog.Info("all goroutines finished unexpectedly")
+		slog.Info("all goroutines finished")
 		return nil
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	for _, serve := range servers {
-		if err := serve.Shutdown(shutdownCtx); err != nil {
-			slog.Warn("server shutdown error", "addr", serve.Addr, "error", err)
+	for _, s := range servers {
+		if err := s.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("server shutdown error", "addr", s.Addr, "error", err)
 		}
 	}
-	shutdownTimeout := 6 * time.Second
 
 	select {
 	case <-done:
 		slog.Info("all servers stopped gracefully")
-	case <-time.After(shutdownTimeout):
-		slog.Warn("shutdown timeout reached, forcing exit")
+	case <-time.After(6 * time.Second):
+		slog.Warn("shutdown timeout")
 	}
 	return shutdownErr
 }
