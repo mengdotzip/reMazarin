@@ -12,8 +12,18 @@ import (
 )
 
 var store *storage.Storage
+var authURL string
 
 func SetStore(s *storage.Storage) { store = s }
+func SetAuthURL(u string)          { authURL = u }
+
+func HandleConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	ok(w, map[string]string{"auth_url": authURL})
+}
 
 const (
 	sessionCookie = "session"

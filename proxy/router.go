@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"reMazarin/api"
 	"strings"
 )
 
@@ -11,6 +12,17 @@ func (p *Proxy) route(w http.ResponseWriter, r *http.Request) {
 	slog.Debug("connection to router",
 		"host", r.Host,
 	)
+
+	// API paths are served from every route regardless of type.
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		name := strings.TrimPrefix(r.URL.Path, "/api/")
+		if handler, err := api.Get(name); err == nil {
+			handler(w, r)
+			return
+		}
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
 
 	host, port, err := net.SplitHostPort(r.Host)
 	if err != nil {

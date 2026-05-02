@@ -2,6 +2,16 @@
 let allGroups = [];
 let selectedUserId = null;
 
+// ── auth redirect ─────────────────────────────────────────────────────────
+async function redirectToAuth() {
+    const res = await fetch('/api/config').catch(() => null);
+    if (res && res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.auth_url) { window.location.href = data.auth_url; return; }
+    }
+    document.body.innerHTML = '<p style="text-align:center;margin-top:40vh;color:#2d6385">Not authenticated. Please log in.</p>';
+}
+
 // ── api helper ────────────────────────────────────────────────────────────
 async function api(method, path, body) {
     const res = await fetch('/api/' + path, {
@@ -9,59 +19,13 @@ async function api(method, path, body) {
         headers: body ? { 'Content-Type': 'application/json' } : {},
         body: body ? JSON.stringify(body) : undefined,
     });
-    if (res.status === 401) { showOverlay(); return null; }
-    if (res.status === 403) { showOverlay('Admin access required'); return null; }
+    if (res.status === 401) { redirectToAuth(); return null; }
+    if (res.status === 403) {
+        document.body.innerHTML = '<p style="text-align:center;margin-top:40vh;color:#c0392b">Access denied — admin group required.</p>';
+        return null;
+    }
     return res.ok ? res.json() : null;
 }
-
-// ── overlay ───────────────────────────────────────────────────────────────
-function showOverlay(msg) {
-    document.getElementById('loginOverlay').style.display = '';
-    if (msg) document.getElementById('loginError').textContent = msg;
-}
-
-function hideOverlay() {
-    document.getElementById('loginOverlay').style.display = 'none';
-    document.getElementById('loginError').textContent = '';
-    document.getElementById('adminUser').value = '';
-    document.getElementById('adminPass').value = '';
-}
-
-document.getElementById('adminLoginForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const errEl = document.getElementById('loginError');
-    errEl.textContent = '';
-
-    const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            username: document.getElementById('adminUser').value,
-            password: document.getElementById('adminPass').value,
-        }),
-    }).catch(() => null);
-
-    if (!res || !res.ok) {
-        const data = res ? await res.json().catch(() => ({})) : {};
-        errEl.textContent = data.error || 'Login failed';
-        return;
-    }
-
-    // Verify admin access
-    const check = await fetch('/api/admin/users').catch(() => null);
-    if (!check || check.status === 403) {
-        errEl.textContent = 'Admin access required';
-        await fetch('/api/auth/logout', { method: 'POST' }).catch(() => null);
-        return;
-    }
-    if (!check.ok) {
-        errEl.textContent = 'Login failed';
-        return;
-    }
-
-    hideOverlay();
-    loadUsersView();
-});
 
 // ── menu view switching ───────────────────────────────────────────────────
 document.querySelectorAll('.menuContainer button').forEach(btn => {
@@ -78,11 +42,8 @@ document.querySelectorAll('.menuContainer button').forEach(btn => {
 // ── init ──────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
     const res = await fetch('/api/auth/me').catch(() => null);
-    if (res && res.ok) {
-        hideOverlay();
-        loadUsersView();
-    }
-    // overlay stays visible if not authenticated
+    if (!res || !res.ok) { redirectToAuth(); return; }
+    loadUsersView();
 });
 
 async function loadUsersView() {
@@ -153,7 +114,6 @@ async function showUserDetail(user) {
         list.appendChild(el);
     });
 
-    // populate assign dropdown
     const sel = document.getElementById('groupAssignSelect');
     sel.innerHTML = '<option value="">Add to group…</option>';
     const userGroupIds = new Set((user.groups || []).map(g => g.id));
@@ -293,7 +253,9 @@ async function loadRoutes() {
         const activeGroups = r.allowed_groups
             ? r.allowed_groups.split(',').map(id => groups.find(g => String(g.id) === id.trim())?.name).filter(Boolean)
             : [];
-        const groupHint = activeGroups.length ? activeGroups.map(n => `<span class="tag">${n}</span>`).join('') : '<span class="tag">public</span>';
+        const groupHint = activeGroups.length
+            ? activeGroups.map(n => `<span class="tag">${n}</span>`).join('')
+            : '<span class="tag">public</span>';
 
         header.innerHTML = `
             <div class="itemMain">${r.url}</div>
@@ -302,7 +264,7 @@ async function loadRoutes() {
             <button style="flex-shrink:0;font-size:11px;padding:0 10px;height:24px">Edit</button>
         `;
 
-        const editPanel = buildRouteEditPanel(r, groups, wrapper, header, list);
+        const editPanel = buildRouteEditPanel(r, groups);
         editPanel.style.display = 'none';
 
         header.querySelector('button').addEventListener('click', () => {
@@ -315,7 +277,7 @@ async function loadRoutes() {
     });
 }
 
-function buildRouteEditPanel(route, groups, wrapper, header, list) {
+function buildRouteEditPanel(route, groups) {
     const panel = document.createElement('div');
     panel.className = 'routeEdit';
 
@@ -353,8 +315,8 @@ function buildRouteEditPanel(route, groups, wrapper, header, list) {
     panel.querySelector('.saveBtn').addEventListener('click', async () => {
         const checked = [...panel.querySelectorAll('.groupCheckList input:checked')].map(el => el.value);
         const body = {
-            allowed_groups: checked.join(','),
-            cookie_policy:  panel.querySelector('select').value,
+            allowed_groups:  checked.join(','),
+            cookie_policy:   panel.querySelector('select').value,
             renew_on_access: panel.querySelector('[type=checkbox]:last-of-type').checked,
         };
         await api('PUT', 'admin/routes?id=' + route.id, body);

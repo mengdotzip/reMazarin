@@ -18,6 +18,7 @@ func InitBuiltin() error {
 		name string
 		h    APIHandler
 	}{
+		{"config", HandleConfig},
 		{"auth/login", HandleLogin},
 		{"auth/logout", HandleLogout},
 		{"auth/register", HandleRegister},

@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"reMazarin/api"
-	"strings"
 
 	"github.com/mdobak/go-xerrors"
 )
@@ -16,41 +14,14 @@ func createStaticHandler(route *ProxyRoute) (http.Handler, error) {
 	if err != nil {
 		return nil, xerrors.Newf("cant open static path %s: %w", route.Target, err)
 	}
-
-	var inner http.Handler
 	switch {
 	case fi.Mode().IsDir():
-		inner, err = folderHandler(route)
+		return folderHandler(route)
 	case fi.Mode().IsRegular():
-		inner, err = fileHandler(route)
+		return fileHandler(route)
 	default:
 		return nil, xerrors.Newf("unsupported file type: %s", route.Target)
 	}
-	if err != nil {
-		return nil, err
-	}
-
-	return &staticWithAPI{static: inner}, nil
-}
-
-// staticWithAPI serves /api/* requests from the API registry and everything
-// else from the static file handler.
-type staticWithAPI struct {
-	static http.Handler
-}
-
-func (h *staticWithAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/api/") {
-		name := strings.TrimPrefix(r.URL.Path, "/api/")
-		handler, err := api.Get(name)
-		if err != nil {
-			http.Error(w, "Not Found", http.StatusNotFound)
-			return
-		}
-		handler(w, r)
-		return
-	}
-	h.static.ServeHTTP(w, r)
 }
 
 func fileHandler(route *ProxyRoute) (http.Handler, error) {

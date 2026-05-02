@@ -76,6 +76,11 @@ func run() error {
 	defer store.Close()
 
 	api.SetStore(store)
+	scheme := "http"
+	if cfg.Web.Tls {
+		scheme = "https"
+	}
+	api.SetAuthURL(scheme + "://" + cfg.Web.Url)
 	proxy.InitAuth(store)
 
 	configRoutes := make([]storage.ConfigRoute, len(cfg.Routes))
