@@ -56,6 +56,7 @@ func (s *Storage) initSchema() error {
 		allowed_groups TEXT DEFAULT '',
 		cookie_policy TEXT DEFAULT 'persistent',
 		renew_on_access BOOLEAN DEFAULT FALSE,
+		allowed_ips TEXT DEFAULT '',
 		created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
@@ -120,6 +121,7 @@ func (s *Storage) migrate() {
 		`ALTER TABLE proxy_routes ADD COLUMN allowed_groups  TEXT DEFAULT ''`,
 		`ALTER TABLE proxy_routes ADD COLUMN cookie_policy   TEXT DEFAULT 'persistent'`,
 		`ALTER TABLE proxy_routes ADD COLUMN renew_on_access BOOLEAN DEFAULT FALSE`,
+		`ALTER TABLE proxy_routes ADD COLUMN allowed_ips TEXT DEFAULT ''`,
 	} {
 		s.db.Exec(stmt) // intentionally ignore "column already exists" errors
 	}

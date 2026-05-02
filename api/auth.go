@@ -246,6 +246,9 @@ func HandleUserRoutes(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(rt.Target, "./") || strings.HasPrefix(rt.Target, "/") {
 			continue
 		}
+		if rt.Type == "tcp" {
+			continue
+		}
 		if storage.RouteAllows(rt.AllowedGroups, groupIDs) {
 			accessible = append(accessible, routeInfo{rt.Url, rt.Tls})
 		}
@@ -502,6 +505,7 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 		var body struct {
 			AllowedGroups string `json:"allowed_groups"`
+			AllowedIPs    string `json:"allowed_ips"`
 			CookiePolicy  string `json:"cookie_policy"`
 			RenewOnAccess bool   `json:"renew_on_access"`
 			Target        string `json:"target"`
@@ -513,7 +517,7 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		if body.CookiePolicy == "" {
 			body.CookiePolicy = "persistent"
 		}
-		if err := store.UpdateRouteAccess(r.Context(), id, body.AllowedGroups, body.CookiePolicy, body.RenewOnAccess); err != nil {
+		if err := store.UpdateRouteAccess(r.Context(), id, body.AllowedGroups, body.AllowedIPs, body.CookiePolicy, body.RenewOnAccess); err != nil {
 			fail(w, http.StatusNotFound, "route not found")
 			return
 		}

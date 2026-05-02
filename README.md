@@ -35,6 +35,12 @@ target = "localhost:8000"
 tls    = true
 cert   = "./certs/cert.pem"
 key    = "./certs/key.pem"
+
+# TCP passthrough route (raw port forwarding, no TLS termination)
+[[routes]]
+url    = "myhost.example.com:2222"
+target = "localhost:22"
+type   = "tcp"
 ```
 
 On first run the database is seeded with:
@@ -47,9 +53,12 @@ On first run the database is seeded with:
 | Users   | View users, assign/remove group membership, delete users |
 | Groups  | Create and delete groups |
 | Invites | Generate invite codes (time-limited) for new user registration |
-| Routes  | Set allowed groups per route, configure cookie lifetime |
+| Routes  | Set allowed groups and/or IP allowlists per route, configure cookie lifetime |
 
-Routes with no groups assigned are **public**. Routes with one or more groups require the visitor to be logged in and a member of at least one of those groups.
+Routes with no groups and no IPs assigned are **public**. Routes can be restricted by:
+
+- **Group membership** — visitor must be logged in and a member of at least one allowed group.
+- **IP allowlist** — a matching client IP grants access without a session (plain IPs or CIDR ranges, comma-separated). For TCP routes, non-matching IPs have their connection closed immediately.
 
 Access control changes take effect **immediately** — no restart needed. See [docs/concepts.md](docs/concepts.md) for details on cookie policies, the admin group, and how the route cache works.
 

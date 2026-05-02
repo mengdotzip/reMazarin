@@ -319,6 +319,10 @@ function buildRouteEditPanel(route, groups) {
         `).join('');
         authRows = `
             <div class="routeEditRow">
+                <label>Allowed IPs</label>
+                <input type="text" class="ipsInput" value="${route.allowed_ips || ''}" placeholder="10.0.0.1, 192.168.0.0/24">
+            </div>
+            <div class="routeEditRow">
                 <label>Allowed groups</label>
                 <div class="groupCheckList">${checkboxes || '<em style="font-size:11px;color:#888">No groups yet</em>'}</div>
             </div>
@@ -336,7 +340,13 @@ function buildRouteEditPanel(route, groups) {
             </div>
         `;
     } else {
-        authRows = `<div class="routeEditRow" style="color:#888;font-size:11px;font-style:italic">Auth settings do not apply to raw TCP routes.</div>`;
+        authRows = `
+            <div class="routeEditRow">
+                <label>Allowed IPs</label>
+                <input type="text" class="ipsInput" value="${route.allowed_ips || ''}" placeholder="10.0.0.1, 192.168.0.0/24">
+            </div>
+            <div class="routeEditRow" style="color:#888;font-size:11px;font-style:italic;padding-left:118px">Session auth does not apply to TCP routes.</div>
+        `;
     }
 
     panel.innerHTML = `
@@ -349,7 +359,9 @@ function buildRouteEditPanel(route, groups) {
     `;
 
     panel.querySelector('.saveBtn').addEventListener('click', async () => {
-        const body = {};
+        const body = {
+            allowed_ips: (panel.querySelector('.ipsInput')?.value || '').trim(),
+        };
         if (!isTcp) {
             const checked = [...panel.querySelectorAll('.groupCheckList input:checked')].map(el => el.value);
             body.allowed_groups  = checked.join(',');

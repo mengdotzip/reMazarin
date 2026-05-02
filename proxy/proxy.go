@@ -75,7 +75,7 @@ func (p *Proxy) StartProxy(ctx context.Context, otel bool) ([]*http.Server, erro
 	for _, route := range p.Proxies {
 		if route.Type == "tcp" {
 			_, port, _ := parseHostPort(route.Url)
-			p.startTCPProxy(port, route.Target)
+			p.startTCPProxy(port, route.Target, route.Url)
 		}
 	}
 
@@ -212,7 +212,7 @@ func (p *Proxy) RegisterRoute(route ProxyRoute) error {
 	}
 
 	if route.Type == "tcp" {
-		p.startTCPProxy(port, route.Target)
+		p.startTCPProxy(port, route.Target, route.Url)
 		slog.Info("tcp route registered", "url", route.Url)
 		return nil
 	}

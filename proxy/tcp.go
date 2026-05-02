@@ -12,7 +12,7 @@ import (
 
 // startTCPProxy launches a raw TCP listener for the given port→target mapping.
 // If a listener already exists on that port it is stopped first.
-func (p *Proxy) startTCPProxy(port, target string) {
+func (p *Proxy) startTCPProxy(port, target, routeUrl string) {
 	if p.ctx == nil {
 		slog.Error("tcp proxy: context not initialized", "port", port)
 		return
@@ -29,7 +29,7 @@ func (p *Proxy) startTCPProxy(port, target string) {
 	p.Wg.Add(1)
 	go func() {
 		defer p.Wg.Done()
-		runTCPProxy(ctx, port, target, p.ErrChan)
+		runTCPProxy(ctx, port, target, routeUrl, p.ErrChan)
 	}()
 }
 
@@ -46,7 +46,7 @@ func (p *Proxy) stopTCPProxy(port string) {
 	}
 }
 
-func runTCPProxy(ctx context.Context, port, target string, errChan chan error) {
+func runTCPProxy(ctx context.Context, port, target, routeUrl string, errChan chan error) {
 	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		errChan <- xerrors.Newf("tcp listen on port %s: %w", port, err)
@@ -74,16 +74,27 @@ func runTCPProxy(ctx context.Context, port, target string, errChan chan error) {
 		connWg.Add(1)
 		go func() {
 			defer connWg.Done()
-			handleTCPConn(ctx, conn, target)
+			handleTCPConn(ctx, conn, target, routeUrl)
 		}()
 	}
 	connWg.Wait()
 	slog.Info("tcp proxy stopped", "port", port)
 }
 
-func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr string) {
+func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUrl string) {
 	defer clientConn.Close()
 	clientIP, _, _ := net.SplitHostPort(clientConn.RemoteAddr().String())
+
+	// IP allowlist check.
+	cacheMu.RLock()
+	route, found := cache[routeUrl]
+	cacheMu.RUnlock()
+	if found && route.AllowedIPs != "" {
+		if !ipAllows(route.AllowedIPs, clientIP) {
+			slog.Warn("tcp: connection rejected by IP policy", "client", clientIP, "route", routeUrl)
+			return
+		}
+	}
 
 	targetConn, err := net.Dial("tcp", targetAddr)
 	if err != nil {
