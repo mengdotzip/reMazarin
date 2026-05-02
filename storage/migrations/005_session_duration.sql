@@ -1,0 +1,1 @@
+ALTER TABLE proxy_routes ADD COLUMN session_duration INTEGER NOT NULL DEFAULT 168;

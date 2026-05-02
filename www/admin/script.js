@@ -333,26 +333,39 @@ function buildRouteEditPanel(route, groups) {
         </div>
     `;
 
-    // Cookie policy rows (HTTP routes only).
+    // Cookie policy row (HTTP routes only).
     const cookieRows = !isTcp ? `
         <div class="routeEditRow">
             <label>Cookie policy</label>
             <select>
-                <option value="persistent" ${route.cookie_policy === 'persistent' ? 'selected' : ''}>Persistent (7 days)</option>
+                <option value="persistent" ${route.cookie_policy === 'persistent' ? 'selected' : ''}>Persistent</option>
                 <option value="session"    ${route.cookie_policy === 'session'    ? 'selected' : ''}>Session only</option>
                 <option value="none"       ${route.cookie_policy === 'none'       ? 'selected' : ''}>None</option>
             </select>
         </div>
+    ` : `<div class="routeEditRow" style="color:#888;font-size:11px;font-style:italic;padding-left:118px">Cookie auth not available for TCP routes.</div>`;
+
+    const renewRow = `
         <div class="routeEditRow">
             <label>Renew on access</label>
             <input type="checkbox" class="renewCheck" ${route.renew_on_access ? 'checked' : ''}>
         </div>
-    ` : `<div class="routeEditRow" style="color:#888;font-size:11px;font-style:italic;padding-left:118px">Cookie auth not available for TCP routes.</div>`;
+    `;
+
+    const durationRow = `
+        <div class="routeEditRow">
+            <label>Session duration</label>
+            <input type="number" class="durationInput" value="${route.session_duration || 168}" min="1" style="width:80px"> hours
+            <span style="font-size:11px;color:#888;margin-left:6px">default 168 h = 7 days</span>
+        </div>
+    `;
 
     panel.innerHTML = `
         ${targetRow}
         ${ipAuthRows}
         ${cookieRows}
+        ${renewRow}
+        ${durationRow}
         <div class="routeEditActions">
             <button onclick="this.closest('.routeEdit').style.display='none'">Cancel</button>
             <button class="saveBtn">Save</button>
@@ -362,13 +375,14 @@ function buildRouteEditPanel(route, groups) {
     panel.querySelector('.saveBtn').addEventListener('click', async () => {
         const checked = [...panel.querySelectorAll('.groupCheckList input:checked')].map(el => el.value);
         const body = {
-            ip_auth:     panel.querySelector('.ipAuthCheck').checked,
-            allowed_groups: checked.join(','),
-            allowed_ips: (panel.querySelector('.ipsInput')?.value || '').trim(),
+            ip_auth:          panel.querySelector('.ipAuthCheck').checked,
+            allowed_groups:   checked.join(','),
+            allowed_ips:      (panel.querySelector('.ipsInput')?.value || '').trim(),
+            renew_on_access:  panel.querySelector('.renewCheck').checked,
+            session_duration: parseInt(panel.querySelector('.durationInput').value) || 168,
         };
         if (!isTcp) {
-            body.cookie_policy   = panel.querySelector('select').value;
-            body.renew_on_access = panel.querySelector('.renewCheck').checked;
+            body.cookie_policy = panel.querySelector('select').value;
         }
         const ti = panel.querySelector('.targetInput');
         if (ti) body.target = ti.value;

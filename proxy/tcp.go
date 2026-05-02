@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/mdobak/go-xerrors"
 )
@@ -102,7 +101,7 @@ func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUr
 					authorized = groupsAllow(route.AllowedGroups, groups)
 				}
 				if authorized && route.RenewOnAccess {
-					authStore.ExtendSessionByID(context.Background(), sess.ID, 7*24*time.Hour)
+					authStore.ExtendSessionByID(context.Background(), sess.ID, routeSessionDur(route))
 				}
 			}
 		}

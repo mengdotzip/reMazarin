@@ -11,22 +11,23 @@ import (
 )
 
 type Route struct {
-	ID            int       `json:"id"`
-	Url           string    `json:"url"`
-	Target        string    `json:"target"`
-	Type          string    `json:"type"`
-	Tls           bool      `json:"tls"`
-	Cert          string    `json:"-"`
-	Key           string    `json:"-"`
-	Enabled       bool      `json:"enabled"`
-	Source        string    `json:"source"`
-	AllowedGroups string    `json:"allowed_groups"`
-	AllowedIPs    string    `json:"allowed_ips"`
-	IPAuth        bool      `json:"ip_auth"`
-	CookiePolicy  string    `json:"cookie_policy"`
-	RenewOnAccess bool      `json:"renew_on_access"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID              int       `json:"id"`
+	Url             string    `json:"url"`
+	Target          string    `json:"target"`
+	Type            string    `json:"type"`
+	Tls             bool      `json:"tls"`
+	Cert            string    `json:"-"`
+	Key             string    `json:"-"`
+	Enabled         bool      `json:"enabled"`
+	Source          string    `json:"source"`
+	AllowedGroups   string    `json:"allowed_groups"`
+	AllowedIPs      string    `json:"allowed_ips"`
+	IPAuth          bool      `json:"ip_auth"`
+	CookiePolicy    string    `json:"cookie_policy"`
+	RenewOnAccess   bool      `json:"renew_on_access"`
+	SessionDuration int       `json:"session_duration"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type ConfigRoute struct {
@@ -84,7 +85,7 @@ func (s *Storage) SyncRoutes(routes []ConfigRoute) error {
 func (s *Storage) GetAllRoutes(ctx context.Context) ([]Route, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, url, target, type, tls, cert, key, enabled, source,
-		       allowed_groups, allowed_ips, ip_auth, cookie_policy, renew_on_access, created_at, updated_at
+		       allowed_groups, allowed_ips, ip_auth, cookie_policy, renew_on_access, session_duration, created_at, updated_at
 		FROM proxy_routes
 		WHERE enabled = TRUE
 		ORDER BY url`)
@@ -99,7 +100,7 @@ func (s *Storage) GetAllRoutes(ctx context.Context) ([]Route, error) {
 		if err := rows.Scan(
 			&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
 			&r.Enabled, &r.Source,
-			&r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.CookiePolicy, &r.RenewOnAccess,
+			&r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.CookiePolicy, &r.RenewOnAccess, &r.SessionDuration,
 			&r.CreatedAt, &r.UpdatedAt,
 		); err != nil {
 			return nil, xerrors.Newf("scan route: %w", err)
@@ -113,12 +114,12 @@ func (s *Storage) GetRouteByUrl(ctx context.Context, url string) (*Route, error)
 	var r Route
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, url, target, type, tls, cert, key, enabled, source,
-		       allowed_groups, allowed_ips, ip_auth, cookie_policy, renew_on_access, created_at, updated_at
+		       allowed_groups, allowed_ips, ip_auth, cookie_policy, renew_on_access, session_duration, created_at, updated_at
 		FROM proxy_routes WHERE url = ? AND enabled = TRUE`, url,
 	).Scan(
 		&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
 		&r.Enabled, &r.Source,
-		&r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.CookiePolicy, &r.RenewOnAccess,
+		&r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.CookiePolicy, &r.RenewOnAccess, &r.SessionDuration,
 		&r.CreatedAt, &r.UpdatedAt,
 	)
 	if err != nil {
@@ -129,10 +130,13 @@ func (s *Storage) GetRouteByUrl(ctx context.Context, url string) (*Route, error)
 
 // UpdateRouteAccess updates access-control fields for a route. It does NOT touch
 // routing config (url, target, type, tls, cert, key).
-func (s *Storage) UpdateRouteAccess(ctx context.Context, id int, allowedGroups, allowedIPs string, ipAuth bool, cookiePolicy string, renewOnAccess bool) error {
+func (s *Storage) UpdateRouteAccess(ctx context.Context, id int, allowedGroups, allowedIPs string, ipAuth bool, cookiePolicy string, renewOnAccess bool, sessionDuration int) error {
+	if sessionDuration <= 0 {
+		sessionDuration = 168
+	}
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE proxy_routes SET allowed_groups = ?, allowed_ips = ?, ip_auth = ?, cookie_policy = ?, renew_on_access = ? WHERE id = ?`,
-		allowedGroups, allowedIPs, ipAuth, cookiePolicy, renewOnAccess, id)
+		`UPDATE proxy_routes SET allowed_groups = ?, allowed_ips = ?, ip_auth = ?, cookie_policy = ?, renew_on_access = ?, session_duration = ? WHERE id = ?`,
+		allowedGroups, allowedIPs, ipAuth, cookiePolicy, renewOnAccess, sessionDuration, id)
 	if err != nil {
 		return xerrors.Newf("update route access: %w", err)
 	}
@@ -151,10 +155,10 @@ func (s *Storage) CreateRoute(ctx context.Context, url, target, routeType string
 		INSERT INTO proxy_routes (url, target, type, source, enabled, cookie_policy)
 		VALUES (?, ?, ?, 'ui', TRUE, 'persistent')
 		RETURNING id, url, target, type, tls, cert, key, enabled, source,
-		          allowed_groups, allowed_ips, ip_auth, cookie_policy, renew_on_access, created_at, updated_at`,
+		          allowed_groups, allowed_ips, ip_auth, cookie_policy, renew_on_access, session_duration, created_at, updated_at`,
 		url, target, routeType,
 	).Scan(&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
-		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.CookiePolicy, &r.RenewOnAccess,
+		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.CookiePolicy, &r.RenewOnAccess, &r.SessionDuration,
 		&r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return nil, xerrors.Newf("create route: %w", err)
@@ -197,10 +201,10 @@ func (s *Storage) GetRouteByID(ctx context.Context, id int) (*Route, error) {
 	var r Route
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, url, target, type, tls, cert, key, enabled, source,
-		       allowed_groups, allowed_ips, ip_auth, cookie_policy, renew_on_access, created_at, updated_at
+		       allowed_groups, allowed_ips, ip_auth, cookie_policy, renew_on_access, session_duration, created_at, updated_at
 		FROM proxy_routes WHERE id = ?`, id,
 	).Scan(&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
-		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.CookiePolicy, &r.RenewOnAccess,
+		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.CookiePolicy, &r.RenewOnAccess, &r.SessionDuration,
 		&r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return nil, xerrors.Newf("get route by id: %w", err)

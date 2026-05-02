@@ -139,6 +139,7 @@ func (s *Storage) bootstrapMigrations() error {
 		{2, "002_access_control.sql", s.columnExists("proxy_routes", "allowed_groups")},
 		{3, "003_allowed_ips.sql", s.columnExists("proxy_routes", "allowed_ips")},
 		{4, "004_ip_session_auth.sql", s.columnExists("proxy_routes", "ip_auth")},
+		{5, "005_session_duration.sql", s.columnExists("proxy_routes", "session_duration")},
 	}
 
 	for _, c := range checks {

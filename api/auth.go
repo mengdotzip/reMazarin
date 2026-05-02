@@ -37,8 +37,8 @@ func HandleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 const (
-	sessionCookie = "session"
-	sessionDur    = 7 * 24 * time.Hour
+	sessionCookie    = "session"
+	defaultSessionDur = 7 * 24 * time.Hour
 )
 
 // ---- helpers ----------------------------------------------------------------
@@ -72,7 +72,7 @@ func rootDomain(hostHeader string) string {
 	return strings.Join(parts[len(parts)-2:], ".")
 }
 
-func setSession(w http.ResponseWriter, r *http.Request, tok string) {
+func setSession(w http.ResponseWriter, r *http.Request, tok string, dur time.Duration) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    tok,
@@ -81,7 +81,7 @@ func setSession(w http.ResponseWriter, r *http.Request, tok string) {
 		HttpOnly: true,
 		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(sessionDur.Seconds()),
+		MaxAge:   int(dur.Seconds()),
 	})
 }
 
@@ -143,13 +143,17 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
+	dur := defaultSessionDur
+	if webRoute, err := store.GetRouteByUrl(r.Context(), authURL); err == nil && webRoute.SessionDuration > 0 {
+		dur = time.Duration(webRoute.SessionDuration) * time.Hour
+	}
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
-	tok, err := store.CreateSession(r.Context(), user.ID, sessionDur, clientIP)
+	tok, err := store.CreateSession(r.Context(), user.ID, dur, clientIP)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "session error")
 		return
 	}
-	setSession(w, r, tok)
+	setSession(w, r, tok, dur)
 	groups, _ := store.GetUserGroups(r.Context(), user.ID)
 	ok(w, map[string]any{"user": user, "groups": groups})
 }
@@ -505,12 +509,13 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var body struct {
-			AllowedGroups string `json:"allowed_groups"`
-			AllowedIPs    string `json:"allowed_ips"`
-			IPAuth        bool   `json:"ip_auth"`
-			CookiePolicy  string `json:"cookie_policy"`
-			RenewOnAccess bool   `json:"renew_on_access"`
-			Target        string `json:"target"`
+			AllowedGroups   string `json:"allowed_groups"`
+			AllowedIPs      string `json:"allowed_ips"`
+			IPAuth          bool   `json:"ip_auth"`
+			CookiePolicy    string `json:"cookie_policy"`
+			RenewOnAccess   bool   `json:"renew_on_access"`
+			SessionDuration int    `json:"session_duration"`
+			Target          string `json:"target"`
 		}
 		if !decode(r, &body) {
 			fail(w, http.StatusBadRequest, "invalid request")
@@ -519,7 +524,7 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		if body.CookiePolicy == "" {
 			body.CookiePolicy = "persistent"
 		}
-		if err := store.UpdateRouteAccess(r.Context(), id, body.AllowedGroups, body.AllowedIPs, body.IPAuth, body.CookiePolicy, body.RenewOnAccess); err != nil {
+		if err := store.UpdateRouteAccess(r.Context(), id, body.AllowedGroups, body.AllowedIPs, body.IPAuth, body.CookiePolicy, body.RenewOnAccess, body.SessionDuration); err != nil {
 			fail(w, http.StatusNotFound, "route not found")
 			return
 		}

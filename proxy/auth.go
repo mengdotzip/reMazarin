@@ -88,7 +88,7 @@ func withAuth(next http.Handler) http.Handler {
 				}
 				if authorized {
 					if route.RenewOnAccess {
-						authStore.ExtendSessionByID(r.Context(), sess.ID, 7*24*time.Hour)
+						authStore.ExtendSessionByID(r.Context(), sess.ID, routeSessionDur(route))
 					}
 					next.ServeHTTP(w, r)
 					return
@@ -126,7 +126,7 @@ func withAuth(next http.Handler) http.Handler {
 			return
 		}
 		if route.RenewOnAccess {
-			authStore.ExtendSession(r.Context(), c.Value, 7*24*time.Hour)
+			authStore.ExtendSession(r.Context(), c.Value, routeSessionDur(route))
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -168,6 +168,15 @@ func extractClientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return ip
+}
+
+// routeSessionDur returns the session renewal duration for the route.
+// Falls back to 7 days when session_duration is not set.
+func routeSessionDur(route storage.Route) time.Duration {
+	if route.SessionDuration > 0 {
+		return time.Duration(route.SessionDuration) * time.Hour
+	}
+	return 7 * 24 * time.Hour
 }
 
 // ipAllows returns true if clientIP matches any entry in the comma-separated

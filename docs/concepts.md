@@ -18,15 +18,23 @@ Access control changes made through the admin panel take effect **immediately** 
 
 ## Cookie policies
 
-Each route can have an independent cookie policy that controls how long the session cookie lasts for that route.
+Each route can have an independent cookie policy that controls how the session cookie behaves.
 
 | Policy | Behaviour |
 |--------|-----------|
-| **Persistent** | Cookie is stored on disk with a 7-day expiry. The browser keeps the user logged in across restarts. |
+| **Persistent** | Cookie is stored on disk and the browser keeps the user logged in across restarts. Expiry is set by **Session duration**. |
 | **Session** | Cookie has no `Max-Age`. The browser discards it when the tab or window is closed. |
 | **None** | No session cookie is issued or required. Use this only for truly public routes where you never want cookie overhead. |
 
-**Renew on access** — when enabled, every successful request extends the session by another 7 days, so active users never get logged out.
+**Renew on access** — when enabled, every successful request extends the session by another full session duration, so active users never get logged out.
+
+## Session duration
+
+Each route has a configurable **session duration** (in hours, default 168 = 7 days). This controls:
+
+- **At login** — the auth/web route's session duration sets how long the initial session lasts and the cookie's `Max-Age`.
+- **On renewal** — when renew on access is enabled, each successful request extends the session by the route's session duration.
+- **IP session auth** — renewal via IP auth also uses the route's session duration.
 
 ## IP session auth
 
@@ -50,7 +58,7 @@ If none match, the request/connection is rejected.
 
 ### Session lifetime and cleanup
 
-The IP association lives for as long as the underlying session is valid — **7 days** from login by default, the same expiry that controls the cookie. There is no separate IP-specific timer.
+The IP association lives for as long as the underlying session is valid. The duration is set by the auth/web route's **Session duration** (default 168 hours = 7 days). There is no separate IP-specific timer.
 
 Sessions are cleaned up automatically every 5 minutes. Once a session expires, the associated IP immediately loses access to any IP-auth-protected route on the next connection attempt (TCP) or request (HTTP).
 
@@ -62,7 +70,7 @@ Sessions are cleaned up automatically every 5 minutes. Once a session expires, t
 
 The **Renew on access** toggle works with IP session auth. When a connection authenticates via IP session auth and the route has renew on access enabled, the session expiry is extended by 7 days — the same behaviour as cookie auth. For TCP routes, renewal happens once per new connection (not once per packet). For HTTP routes, it happens on every successfully authenticated request.
 
-This means a user who regularly SSHs through an IP-auth TCP route never gets logged out, as long as they connect within 7 days of their last access.
+This means a user who regularly SSHs through an IP-auth TCP route never gets logged out, as long as they connect within the session duration of their last access.
 
 **Note on proxied deployments** — both mechanisms use the direct TCP connection's remote address. If reMazarin sits behind another load balancer or proxy, the IP seen is that proxy's address, not the end user's.
 
