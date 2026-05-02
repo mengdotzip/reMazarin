@@ -25,18 +25,21 @@ type listenServer struct {
 	Tls        bool
 	CertPath   string
 	KeyPath    string
+	mu         sync.RWMutex
 	Routes     map[string]*ProxyRoute
 	ProxyCache map[string]http.Handler
 }
 
 type Proxy struct {
-	Proxies []ProxyRoute
-	servers map[string]*listenServer
-	Wg      *sync.WaitGroup
-	ErrChan chan error
+	Proxies     []ProxyRoute
+	servers     map[string]*listenServer
+	Wg          *sync.WaitGroup
+	ErrChan     chan error
+	otelEnabled bool
 }
 
 func (p *Proxy) StartProxy(otel bool) ([]*http.Server, error) {
+	p.otelEnabled = otel
 
 	slog.Info("starting proxies",
 		"count", len(p.Proxies),
@@ -122,69 +125,82 @@ func (p *Proxy) parseProxies() error {
 
 func (p *Proxy) initProxies(otel bool) error {
 	slog.Info("initializing reverse proxies")
-
 	for port, server := range p.servers {
 		for host, route := range server.Routes {
-			switch route.Type {
-			case "static":
-				handler, err := createStaticHandler(route)
-				if err != nil {
-					return xerrors.Newf("create handler for %s: %w", route.Url, err)
-				}
-
-				if otel {
-					handler = otelhttp.NewHandler(handler, "/")
-				}
-
-				server.ProxyCache[host] = handler
-				slog.Debug("static serve cached",
-					"host", host,
-					"port", port,
-					"target", route.Target,
-				)
-			case "proxy", "":
-				proxy, err := createReverseProxy(route)
-				if err != nil {
-					return xerrors.Newf("create proxy for %s: %w", route.Url, err)
-				}
-
-				var newHandle http.Handler
-				newHandle = proxy
-				if otel {
-					newHandle = otelhttp.NewHandler(proxy, "/")
-				}
-
-				server.ProxyCache[host] = newHandle
-				slog.Debug("proxy cached",
-					"host", host,
-					"port", port,
-					"target", route.Target,
-				)
-			case "api":
-				api, err := createAPIHandler(route)
-				if err != nil {
-					return xerrors.Newf("create api for %s: %w", route.Url, err)
-				}
-
-				if otel {
-					api = otelhttp.NewHandler(api, "/")
-				}
-
-				server.ProxyCache[host] = api
-				slog.Debug("api cached",
-					"host", host,
-					"port", port,
-					"target", route.Target,
-				)
-
-			default:
-				return xerrors.Newf("invalid config, unkown type: %s", route.Type)
+			handler, err := createHandlerForRoute(route, otel)
+			if err != nil {
+				return xerrors.Newf("create handler for %s: %w", route.Url, err)
 			}
+			server.ProxyCache[host] = handler
+			slog.Debug("handler cached", "host", host, "port", port, "type", route.Type)
 		}
 	}
-
 	slog.Info("all proxies initialized", "count", len(p.Proxies))
 	return nil
+}
+
+func createHandlerForRoute(route *ProxyRoute, otel bool) (http.Handler, error) {
+	var handler http.Handler
+	var err error
+	switch route.Type {
+	case "static":
+		handler, err = createStaticHandler(route)
+	case "api":
+		handler, err = createAPIHandler(route)
+	case "proxy", "":
+		handler, err = createReverseProxy(route)
+	default:
+		return nil, xerrors.Newf("unknown handler type: %s", route.Type)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if otel {
+		handler = otelhttp.NewHandler(handler, "/")
+	}
+	return handler, nil
+}
+
+// RegisterRoute dynamically adds or replaces a route in a running proxy.
+// Returns an error if no listener exists for the route's port; in that case
+// the route is still persisted in the DB and will be active after a restart.
+func (p *Proxy) RegisterRoute(route ProxyRoute) error {
+	host, port, err := parseHostPort(route.Url)
+	if err != nil {
+		return xerrors.Newf("parse route url: %w", err)
+	}
+	ls, ok := p.servers[port]
+	if !ok {
+		return xerrors.Newf("no active listener on port %s — route saved, restart to activate", port)
+	}
+	handler, err := createHandlerForRoute(&route, p.otelEnabled)
+	if err != nil {
+		return xerrors.Newf("create handler: %w", err)
+	}
+	r := route
+	ls.mu.Lock()
+	ls.Routes[host] = &r
+	ls.ProxyCache[host] = handler
+	ls.mu.Unlock()
+	slog.Info("route registered", "url", route.Url)
+	return nil
+}
+
+// UnregisterRoute removes a route from the live proxy.
+func (p *Proxy) UnregisterRoute(url string) {
+	host, port, err := parseHostPort(url)
+	if err != nil {
+		return
+	}
+	ls, ok := p.servers[port]
+	if !ok {
+		return
+	}
+	ls.mu.Lock()
+	delete(ls.Routes, host)
+	delete(ls.ProxyCache, host)
+	ls.mu.Unlock()
+	slog.Info("route unregistered", "url", url)
 }
 
 func parseHostPort(rawURL string) (string, string, error) {

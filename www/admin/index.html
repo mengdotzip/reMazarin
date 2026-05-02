@@ -74,9 +74,24 @@
           <content class="routesList">
             <div class="panelHeader">
               <span class="panelTitle">Routes</span>
-              <span class="hint">Click a route to configure access control</span>
+              <span class="hint">Click Edit to manage access or backend</span>
             </div>
             <div id="routeItems" class="itemList"></div>
+          </content>
+          <content class="routeAdd">
+            <div class="panelHeader">
+              <span class="panelTitle">Add Route</span>
+            </div>
+            <div class="createRow">
+              <input type="text" id="newRouteUrl" placeholder="host:port">
+            </div>
+            <div class="createRow">
+              <input type="text" id="newRouteTarget" placeholder="target (ip:port)">
+            </div>
+            <div class="createRow">
+              <button onclick="createRoute()" style="width:100%">+ Add</button>
+            </div>
+            <div id="newRouteMsg" style="display:none;font-size:11px;color:#666;margin-top:6px;padding:0 4px;"></div>
           </content>
         </div>
       </div>

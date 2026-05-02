@@ -142,6 +142,70 @@ func (s *Storage) UpdateRouteAccess(ctx context.Context, id int, allowedGroups, 
 	return nil
 }
 
+// CreateRoute adds a new route created via the admin UI (source = 'ui').
+func (s *Storage) CreateRoute(ctx context.Context, url, target, routeType string) (*Route, error) {
+	var r Route
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO proxy_routes (url, target, type, source, enabled, cookie_policy)
+		VALUES (?, ?, ?, 'ui', TRUE, 'persistent')
+		RETURNING id, url, target, type, tls, cert, key, enabled, source,
+		          allowed_groups, cookie_policy, renew_on_access, created_at, updated_at`,
+		url, target, routeType,
+	).Scan(&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
+		&r.Enabled, &r.Source, &r.AllowedGroups, &r.CookiePolicy, &r.RenewOnAccess,
+		&r.CreatedAt, &r.UpdatedAt)
+	if err != nil {
+		return nil, xerrors.Newf("create route: %w", err)
+	}
+	slog.Info("route created", "url", url)
+	return &r, nil
+}
+
+// DeleteRoute deletes a UI-sourced route and returns its URL for proxy cleanup.
+// Returns an error if the route is config-sourced (those are immutable).
+func (s *Storage) DeleteRoute(ctx context.Context, id int) (string, error) {
+	var url string
+	err := s.db.QueryRowContext(ctx,
+		`DELETE FROM proxy_routes WHERE id = ? AND source = 'ui' RETURNING url`, id,
+	).Scan(&url)
+	if err != nil {
+		return "", xerrors.Newf("delete route: %w", err)
+	}
+	slog.Info("route deleted", "id", id)
+	return url, nil
+}
+
+// UpdateRouteEndpoint updates the backend target for a UI-sourced route.
+func (s *Storage) UpdateRouteEndpoint(ctx context.Context, id int, target string) error {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE proxy_routes SET target = ? WHERE id = ? AND source = 'ui'`, target, id)
+	if err != nil {
+		return xerrors.Newf("update route endpoint: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return xerrors.Newf("route not found or not editable")
+	}
+	slog.Info("route endpoint updated", "id", id)
+	return nil
+}
+
+// GetRouteByID fetches a single route by its primary key.
+func (s *Storage) GetRouteByID(ctx context.Context, id int) (*Route, error) {
+	var r Route
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, url, target, type, tls, cert, key, enabled, source,
+		       allowed_groups, cookie_policy, renew_on_access, created_at, updated_at
+		FROM proxy_routes WHERE id = ?`, id,
+	).Scan(&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
+		&r.Enabled, &r.Source, &r.AllowedGroups, &r.CookiePolicy, &r.RenewOnAccess,
+		&r.CreatedAt, &r.UpdatedAt)
+	if err != nil {
+		return nil, xerrors.Newf("get route by id: %w", err)
+	}
+	return &r, nil
+}
+
 // EnsureRouteGroup sets the allowed_groups for the given route URL to the
 // named group's ID, but only if allowed_groups is currently empty. This is used
 // at startup to protect system routes (e.g. the admin panel) without overriding

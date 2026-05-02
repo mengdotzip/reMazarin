@@ -45,24 +45,22 @@ func (p *Proxy) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, ok = ls.Routes[host] // We dont really need this anymore, the proxy cache can look this up
-	if !ok {
-		slog.Debug("requested url does not exist",
-			"url", host,
-		)
+	ls.mu.RLock()
+	_, routeFound := ls.Routes[host]
+	handler, handlerFound := ls.ProxyCache[host]
+	ls.mu.RUnlock()
+
+	if !routeFound {
+		slog.Debug("requested url does not exist", "url", host)
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return
 	}
-
-	proxy, ok := ls.ProxyCache[host]
-	if !ok {
+	if !handlerFound {
 		slog.Error("proxy not cached", "host", host)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	slog.Debug("routing",
-		"host", r.Host,
-	)
-	withAuth(proxy).ServeHTTP(w, r)
+	slog.Debug("routing", "host", r.Host)
+	withAuth(handler).ServeHTTP(w, r)
 }

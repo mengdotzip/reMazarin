@@ -16,6 +16,12 @@ import (
 // proxy cache can be refreshed immediately. Set this in main.go.
 var OnRouteUpdate func()
 
+// OnRouteRegister registers (or re-registers) a route in the live proxy.
+var OnRouteRegister func(url, target, routeType string) error
+
+// OnRouteDelete removes a route from the live proxy.
+var OnRouteDelete func(url string)
+
 var store *storage.Storage
 var authURL string
 
@@ -458,6 +464,36 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 		ok(w, map[string]any{"routes": routes})
 
+	case http.MethodPost:
+		var body struct {
+			URL    string `json:"url"`
+			Target string `json:"target"`
+			Type   string `json:"type"`
+		}
+		if !decode(r, &body) || body.URL == "" || body.Target == "" {
+			fail(w, http.StatusBadRequest, "url and target required")
+			return
+		}
+		if body.Type == "" {
+			body.Type = "proxy"
+		}
+		route, err := store.CreateRoute(r.Context(), body.URL, body.Target, body.Type)
+		if err != nil {
+			fail(w, http.StatusConflict, "url already in use")
+			return
+		}
+		var regErr string
+		if OnRouteRegister != nil {
+			if err := OnRouteRegister(body.URL, body.Target, body.Type); err != nil {
+				slog.Warn("route saved but not live", "url", body.URL, "error", err)
+				regErr = err.Error()
+			}
+		}
+		if OnRouteUpdate != nil {
+			OnRouteUpdate()
+		}
+		ok(w, map[string]any{"route": route, "warning": regErr})
+
 	case http.MethodPut:
 		id, err := strconv.Atoi(r.URL.Query().Get("id"))
 		if err != nil {
@@ -468,6 +504,7 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 			AllowedGroups string `json:"allowed_groups"`
 			CookiePolicy  string `json:"cookie_policy"`
 			RenewOnAccess bool   `json:"renew_on_access"`
+			Target        string `json:"target"`
 		}
 		if !decode(r, &body) {
 			fail(w, http.StatusBadRequest, "invalid request")
@@ -479,6 +516,33 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		if err := store.UpdateRouteAccess(r.Context(), id, body.AllowedGroups, body.CookiePolicy, body.RenewOnAccess); err != nil {
 			fail(w, http.StatusNotFound, "route not found")
 			return
+		}
+		// Update backend target for UI-sourced routes only.
+		if body.Target != "" && OnRouteRegister != nil {
+			if rt, err := store.GetRouteByID(r.Context(), id); err == nil && rt.Source == "ui" {
+				if err := store.UpdateRouteEndpoint(r.Context(), id, body.Target); err == nil {
+					OnRouteRegister(rt.Url, body.Target, rt.Type)
+				}
+			}
+		}
+		if OnRouteUpdate != nil {
+			OnRouteUpdate()
+		}
+		ok(w, map[string]bool{"ok": true})
+
+	case http.MethodDelete:
+		id, err := strconv.Atoi(r.URL.Query().Get("id"))
+		if err != nil {
+			fail(w, http.StatusBadRequest, "invalid id")
+			return
+		}
+		url, err := store.DeleteRoute(r.Context(), id)
+		if err != nil {
+			fail(w, http.StatusBadRequest, "route not found or config routes cannot be deleted")
+			return
+		}
+		if OnRouteDelete != nil {
+			OnRouteDelete(url)
 		}
 		if OnRouteUpdate != nil {
 			OnRouteUpdate()

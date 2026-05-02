@@ -28,7 +28,11 @@ func setupLogging() *slog.Logger {
 }
 
 func getFrames(err error) []map[string]any {
-	frames := xerrors.StackTrace(err).Frames()
+	callers := xerrors.StackTrace(err)
+	if len(callers) == 0 {
+		return nil
+	}
+	frames := callers.Frames()
 	if len(frames) == 0 {
 		return nil
 	}

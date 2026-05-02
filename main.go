@@ -122,6 +122,12 @@ func run() error {
 	var wg sync.WaitGroup
 	p := proxy.Proxy{Proxies: proxyRoutes, Wg: &wg}
 
+	// Wire dynamic route callbacks after p is initialised.
+	api.OnRouteRegister = func(url, target, routeType string) error {
+		return p.RegisterRoute(proxy.ProxyRoute{Url: url, Target: target, Type: routeType})
+	}
+	api.OnRouteDelete = func(url string) { p.UnregisterRoute(url) }
+
 	servers, err := p.StartProxy(cfg.Otel.Enabled)
 	if err != nil {
 		return xerrors.Newf("start proxy: %w", err)

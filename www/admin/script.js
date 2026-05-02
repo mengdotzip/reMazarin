@@ -248,12 +248,7 @@ async function loadRoutes() {
     (routeData.routes || []).forEach(r => {
         const wrapper = document.createElement('div');
         wrapper.className = 'item';
-        wrapper.style.flexDirection = 'column';
-        wrapper.style.alignItems = 'stretch';
-        wrapper.style.cursor = 'default';
-
-        const header = document.createElement('div');
-        header.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;';
+        wrapper.style.cssText = 'flex-direction:column;align-items:stretch;cursor:default;';
 
         const activeGroups = r.allowed_groups
             ? r.allowed_groups.split(',').map(id => groups.find(g => String(g.id) === id.trim())?.name).filter(Boolean)
@@ -262,17 +257,35 @@ async function loadRoutes() {
             ? activeGroups.map(n => `<span class="tag">${n}</span>`).join('')
             : '<span class="tag">public</span>';
 
+        const typeBadge   = `<span class="badge badge-${r.type || 'proxy'}">${r.type || 'proxy'}</span>`;
+        const sourceBadge = `<span class="badge badge-${r.source}">${r.source}</span>`;
+        const delBtn = r.source === 'ui'
+            ? `<button class="delBtn" title="Delete route">×</button>`
+            : '';
+
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex;align-items:center;gap:8px;';
         header.innerHTML = `
-            <div class="itemMain">${r.url}</div>
-            <div class="itemSub">→ ${r.target}</div>
+            <div style="flex:1;min-width:0">
+                <div class="itemMain">${r.url}</div>
+                <div class="itemSub">→ ${r.target}</div>
+            </div>
             <div class="tags">${groupHint}</div>
-            <button style="flex-shrink:0;font-size:11px;padding:0 10px;height:24px">Edit</button>
+            ${typeBadge}${sourceBadge}
+            ${delBtn}
+            <button class="editBtn" style="flex-shrink:0;font-size:11px;padding:0 10px;height:24px">Edit</button>
         `;
+
+        if (r.source === 'ui') {
+            header.querySelector('.delBtn').addEventListener('click', e => {
+                e.stopPropagation();
+                deleteRoute(r.id, r.url);
+            });
+        }
 
         const editPanel = buildRouteEditPanel(r, groups);
         editPanel.style.display = 'none';
-
-        header.querySelector('button').addEventListener('click', () => {
+        header.querySelector('.editBtn').addEventListener('click', () => {
             editPanel.style.display = editPanel.style.display === 'none' ? '' : 'none';
         });
 
@@ -294,7 +307,15 @@ function buildRouteEditPanel(route, groups) {
         </label>
     `).join('');
 
+    const targetRow = route.source === 'ui' ? `
+        <div class="routeEditRow">
+            <label>Backend</label>
+            <input type="text" class="targetInput" value="${route.target}" placeholder="host:port">
+        </div>
+    ` : '';
+
     panel.innerHTML = `
+        ${targetRow}
         <div class="routeEditRow">
             <label>Allowed groups</label>
             <div class="groupCheckList">${checkboxes || '<em style="font-size:11px;color:#888">No groups yet</em>'}</div>
@@ -309,7 +330,7 @@ function buildRouteEditPanel(route, groups) {
         </div>
         <div class="routeEditRow">
             <label>Renew on access</label>
-            <input type="checkbox" ${route.renew_on_access ? 'checked' : ''}>
+            <input type="checkbox" class="renewCheck" ${route.renew_on_access ? 'checked' : ''}>
         </div>
         <div class="routeEditActions">
             <button onclick="this.closest('.routeEdit').style.display='none'">Cancel</button>
@@ -322,11 +343,40 @@ function buildRouteEditPanel(route, groups) {
         const body = {
             allowed_groups:  checked.join(','),
             cookie_policy:   panel.querySelector('select').value,
-            renew_on_access: panel.querySelector('[type=checkbox]:last-of-type').checked,
+            renew_on_access: panel.querySelector('.renewCheck').checked,
         };
+        const ti = panel.querySelector('.targetInput');
+        if (ti) body.target = ti.value;
         await api('PUT', 'admin/routes?id=' + route.id, body);
         loadRoutes();
     });
 
     return panel;
+}
+
+async function createRoute() {
+    const url    = document.getElementById('newRouteUrl').value.trim();
+    const target = document.getElementById('newRouteTarget').value.trim();
+    const msg    = document.getElementById('newRouteMsg');
+    msg.style.display = 'none';
+    if (!url || !target) {
+        msg.style.display = '';
+        msg.textContent = 'URL and target are required.';
+        return;
+    }
+    const data = await api('POST', 'admin/routes', { url, target, type: 'proxy' });
+    if (!data) return;
+    document.getElementById('newRouteUrl').value = '';
+    document.getElementById('newRouteTarget').value = '';
+    msg.style.display = '';
+    msg.textContent = data.warning
+        ? `Saved — ${data.warning}`
+        : '✓ Route added and live.';
+    loadRoutes();
+}
+
+async function deleteRoute(id, url) {
+    if (!confirm(`Delete route "${url}"?\nThis cannot be undone.`)) return;
+    await api('DELETE', 'admin/routes?id=' + id);
+    loadRoutes();
 }

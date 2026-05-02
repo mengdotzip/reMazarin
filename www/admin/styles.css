@@ -91,11 +91,26 @@ button:active, button.active {
 /* ── Routes view ──────────────────────────────────────────────────────────── */
 .routesContainer {
     height: 100%;
+    display: flex;
+    gap: 15px;
 }
 
-.routesList {
-    height: 100%;
+.routesList { flex: 3; min-width: 0; }
+.routeAdd   { flex: 1.5; min-width: 180px; align-self: flex-start; }
+
+/* ── Badges ───────────────────────────────────────────────────────────────── */
+.badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    flex-shrink: 0;
+    white-space: nowrap;
 }
+.badge-proxy  { background: rgba(45,133,80,0.18);   color: #267a47; }
+.badge-static { background: rgba(180,100,0,0.15);   color: #9a5500; }
+.badge-api    { background: rgba(100,60,200,0.15);  color: #5030a0; }
+.badge-config { background: rgba(120,120,120,0.15); color: #666; }
+.badge-ui     { background: rgba(45,99,133,0.2);    color: #2d6385; }
 
 /* ── content panels ───────────────────────────────────────────────────────── */
 content {
