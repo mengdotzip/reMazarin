@@ -116,6 +116,7 @@ func run() error {
 		proxyRoutes[i] = proxy.ProxyRoute{
 			Url: r.Url, Target: r.Target, Type: r.Type,
 			Tls: r.Tls, Cert: r.Cert, Key: r.Key,
+			InjectAPI: r.Url == cfg.Web.Url || r.Url == cfg.Admin.Url,
 		}
 	}
 

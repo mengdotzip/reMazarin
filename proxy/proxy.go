@@ -12,12 +12,13 @@ import (
 )
 
 type ProxyRoute struct {
-	Url    string
-	Target string
-	Type   string
-	Tls    bool
-	Cert   string
-	Key    string
+	Url       string
+	Target    string
+	Type      string
+	Tls       bool
+	Cert      string
+	Key       string
+	InjectAPI bool // true only for auth/admin hosts — enables built-in /api/ handlers
 }
 
 type listenServer struct {
