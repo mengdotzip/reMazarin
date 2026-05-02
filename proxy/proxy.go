@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"os"
@@ -34,12 +35,16 @@ type listenServer struct {
 type Proxy struct {
 	Proxies     []ProxyRoute
 	servers     map[string]*listenServer
+	tcpCancels  map[string]context.CancelFunc
+	tcpMu       sync.Mutex
+	ctx         context.Context
 	Wg          *sync.WaitGroup
 	ErrChan     chan error
 	otelEnabled bool
 }
 
-func (p *Proxy) StartProxy(otel bool) ([]*http.Server, error) {
+func (p *Proxy) StartProxy(ctx context.Context, otel bool) ([]*http.Server, error) {
+	p.ctx = ctx
 	p.otelEnabled = otel
 
 	slog.Info("starting proxies",
@@ -47,6 +52,7 @@ func (p *Proxy) StartProxy(otel bool) ([]*http.Server, error) {
 	)
 
 	p.servers = make(map[string]*listenServer)
+	p.tcpCancels = make(map[string]context.CancelFunc)
 
 	if err := p.parseProxies(); err != nil {
 		return nil, xerrors.Newf("parse proxies: %w", err)
@@ -56,14 +62,31 @@ func (p *Proxy) StartProxy(otel bool) ([]*http.Server, error) {
 		return nil, xerrors.Newf("init proxies: %w", err)
 	}
 
-	p.ErrChan = make(chan error, len(p.servers))
+	tcpCount := 0
+	for _, r := range p.Proxies {
+		if r.Type == "tcp" {
+			tcpCount++
+		}
+	}
+	p.ErrChan = make(chan error, len(p.servers)+tcpCount)
+
 	servers := p.startListeners()
+
+	for _, route := range p.Proxies {
+		if route.Type == "tcp" {
+			_, port, _ := parseHostPort(route.Url)
+			p.startTCPProxy(port, route.Target)
+		}
+	}
+
 	return servers, nil
 }
 
 func (p *Proxy) parseProxies() error {
 
 	usedUrls := make(map[string]bool)
+	tcpPorts := make(map[string]bool)
+
 	for _, route := range p.Proxies {
 		host, port, err := parseHostPort(route.Url)
 		if err != nil {
@@ -74,6 +97,22 @@ func (p *Proxy) parseProxies() error {
 			return xerrors.Newf("duplicate URL configuration: %s (port %s)", host, port)
 		}
 		usedUrls[route.Url] = true
+
+		if route.Type == "tcp" {
+			if tcpPorts[port] {
+				return xerrors.Newf("duplicate TCP port %s", port)
+			}
+			if _, httpExists := p.servers[port]; httpExists {
+				return xerrors.Newf("port %s used by both HTTP and TCP routes", port)
+			}
+			tcpPorts[port] = true
+			slog.Debug("new tcp route", "port", port, "target", route.Target)
+			continue
+		}
+
+		if tcpPorts[port] {
+			return xerrors.Newf("port %s used by both TCP and HTTP routes", port)
+		}
 
 		if route.Tls {
 			if route.Cert == "" || route.Key == "" {
@@ -163,13 +202,21 @@ func createHandlerForRoute(route *ProxyRoute, otel bool) (http.Handler, error) {
 }
 
 // RegisterRoute dynamically adds or replaces a route in a running proxy.
-// Returns an error if no listener exists for the route's port; in that case
-// the route is still persisted in the DB and will be active after a restart.
+// For TCP routes a new dedicated listener is started on the route's port.
+// For HTTP routes, returns an error if no listener exists for the route's port;
+// in that case the route is still persisted in the DB and will be active after a restart.
 func (p *Proxy) RegisterRoute(route ProxyRoute) error {
 	host, port, err := parseHostPort(route.Url)
 	if err != nil {
 		return xerrors.Newf("parse route url: %w", err)
 	}
+
+	if route.Type == "tcp" {
+		p.startTCPProxy(port, route.Target)
+		slog.Info("tcp route registered", "url", route.Url)
+		return nil
+	}
+
 	ls, ok := p.servers[port]
 	if !ok {
 		return xerrors.Newf("no active listener on port %s — route saved, restart to activate", port)
@@ -193,15 +240,20 @@ func (p *Proxy) UnregisterRoute(url string) {
 	if err != nil {
 		return
 	}
+
 	ls, ok := p.servers[port]
-	if !ok {
+	if ok {
+		ls.mu.Lock()
+		delete(ls.Routes, host)
+		delete(ls.ProxyCache, host)
+		ls.mu.Unlock()
+		slog.Info("route unregistered", "url", url)
 		return
 	}
-	ls.mu.Lock()
-	delete(ls.Routes, host)
-	delete(ls.ProxyCache, host)
-	ls.mu.Unlock()
-	slog.Info("route unregistered", "url", url)
+
+	// Not an HTTP route — stop TCP proxy if one exists on this port.
+	p.stopTCPProxy(port)
+	slog.Info("tcp route unregistered", "url", url)
 }
 
 func parseHostPort(rawURL string) (string, string, error) {

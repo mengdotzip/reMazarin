@@ -129,7 +129,7 @@ func run() error {
 	}
 	api.OnRouteDelete = func(url string) { p.UnregisterRoute(url) }
 
-	servers, err := p.StartProxy(cfg.Otel.Enabled)
+	servers, err := p.StartProxy(ctx, cfg.Otel.Enabled)
 	if err != nil {
 		return xerrors.Newf("start proxy: %w", err)
 	}

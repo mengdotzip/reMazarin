@@ -299,13 +299,7 @@ function buildRouteEditPanel(route, groups) {
     const panel = document.createElement('div');
     panel.className = 'routeEdit';
 
-    const selectedIds = new Set(route.allowed_groups.split(',').map(s => s.trim()).filter(Boolean));
-    const checkboxes = groups.map(g => `
-        <label class="groupCheck">
-            <input type="checkbox" value="${g.id}" ${selectedIds.has(String(g.id)) ? 'checked' : ''}>
-            ${g.name}
-        </label>
-    `).join('');
+    const isTcp = route.type === 'tcp';
 
     const targetRow = route.source === 'ui' ? `
         <div class="routeEditRow">
@@ -314,24 +308,40 @@ function buildRouteEditPanel(route, groups) {
         </div>
     ` : '';
 
+    let authRows = '';
+    if (!isTcp) {
+        const selectedIds = new Set(route.allowed_groups.split(',').map(s => s.trim()).filter(Boolean));
+        const checkboxes = groups.map(g => `
+            <label class="groupCheck">
+                <input type="checkbox" value="${g.id}" ${selectedIds.has(String(g.id)) ? 'checked' : ''}>
+                ${g.name}
+            </label>
+        `).join('');
+        authRows = `
+            <div class="routeEditRow">
+                <label>Allowed groups</label>
+                <div class="groupCheckList">${checkboxes || '<em style="font-size:11px;color:#888">No groups yet</em>'}</div>
+            </div>
+            <div class="routeEditRow">
+                <label>Cookie policy</label>
+                <select>
+                    <option value="persistent" ${route.cookie_policy === 'persistent' ? 'selected' : ''}>Persistent (7 days)</option>
+                    <option value="session"    ${route.cookie_policy === 'session'    ? 'selected' : ''}>Session only</option>
+                    <option value="none"       ${route.cookie_policy === 'none'       ? 'selected' : ''}>None</option>
+                </select>
+            </div>
+            <div class="routeEditRow">
+                <label>Renew on access</label>
+                <input type="checkbox" class="renewCheck" ${route.renew_on_access ? 'checked' : ''}>
+            </div>
+        `;
+    } else {
+        authRows = `<div class="routeEditRow" style="color:#888;font-size:11px;font-style:italic">Auth settings do not apply to raw TCP routes.</div>`;
+    }
+
     panel.innerHTML = `
         ${targetRow}
-        <div class="routeEditRow">
-            <label>Allowed groups</label>
-            <div class="groupCheckList">${checkboxes || '<em style="font-size:11px;color:#888">No groups yet</em>'}</div>
-        </div>
-        <div class="routeEditRow">
-            <label>Cookie policy</label>
-            <select>
-                <option value="persistent" ${route.cookie_policy === 'persistent' ? 'selected' : ''}>Persistent (7 days)</option>
-                <option value="session"    ${route.cookie_policy === 'session'    ? 'selected' : ''}>Session only</option>
-                <option value="none"       ${route.cookie_policy === 'none'       ? 'selected' : ''}>None</option>
-            </select>
-        </div>
-        <div class="routeEditRow">
-            <label>Renew on access</label>
-            <input type="checkbox" class="renewCheck" ${route.renew_on_access ? 'checked' : ''}>
-        </div>
+        ${authRows}
         <div class="routeEditActions">
             <button onclick="this.closest('.routeEdit').style.display='none'">Cancel</button>
             <button class="saveBtn">Save</button>
@@ -339,12 +349,13 @@ function buildRouteEditPanel(route, groups) {
     `;
 
     panel.querySelector('.saveBtn').addEventListener('click', async () => {
-        const checked = [...panel.querySelectorAll('.groupCheckList input:checked')].map(el => el.value);
-        const body = {
-            allowed_groups:  checked.join(','),
-            cookie_policy:   panel.querySelector('select').value,
-            renew_on_access: panel.querySelector('.renewCheck').checked,
-        };
+        const body = {};
+        if (!isTcp) {
+            const checked = [...panel.querySelectorAll('.groupCheckList input:checked')].map(el => el.value);
+            body.allowed_groups  = checked.join(',');
+            body.cookie_policy   = panel.querySelector('select').value;
+            body.renew_on_access = panel.querySelector('.renewCheck').checked;
+        }
         const ti = panel.querySelector('.targetInput');
         if (ti) body.target = ti.value;
         await api('PUT', 'admin/routes?id=' + route.id, body);
@@ -357,6 +368,7 @@ function buildRouteEditPanel(route, groups) {
 async function createRoute() {
     const url    = document.getElementById('newRouteUrl').value.trim();
     const target = document.getElementById('newRouteTarget').value.trim();
+    const type   = document.getElementById('newRouteType').value || 'proxy';
     const msg    = document.getElementById('newRouteMsg');
     msg.style.display = 'none';
     if (!url || !target) {
@@ -364,7 +376,7 @@ async function createRoute() {
         msg.textContent = 'URL and target are required.';
         return;
     }
-    const data = await api('POST', 'admin/routes', { url, target, type: 'proxy' });
+    const data = await api('POST', 'admin/routes', { url, target, type });
     if (!data) return;
     document.getElementById('newRouteUrl').value = '';
     document.getElementById('newRouteTarget').value = '';

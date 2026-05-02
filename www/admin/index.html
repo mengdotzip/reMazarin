@@ -89,6 +89,12 @@
               <input type="text" id="newRouteTarget" placeholder="target (ip:port)">
             </div>
             <div class="createRow">
+              <select id="newRouteType">
+                <option value="proxy">proxy (HTTP)</option>
+                <option value="tcp">tcp (raw TCP)</option>
+              </select>
+            </div>
+            <div class="createRow">
               <button onclick="createRoute()" style="width:100%">+ Add</button>
             </div>
             <div id="newRouteMsg" style="display:none;font-size:11px;color:#666;margin-top:6px;padding:0 4px;"></div>
