@@ -3,17 +3,38 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>AUTH Mazarin</title>
+  <title>reMazarin</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <div class="panelRow">
+
     <div class="container">
       <h1 class="headerText">reMazarin</h1>
-      <form id="authForm" class="formContainer" method="POST" action="/sse">
-        <input type="text" id="username" name="username" placeholder="Enter your username" required />
-        <input type="password" id="password" name="password" placeholder="Enter your password" required />
-        <button type="submit">Authenticate</button>
-      </form>
+
+      <div id="formState">
+        <form id="authForm" class="formContainer">
+          <input type="text" id="username" placeholder="Username" required />
+          <input type="password" id="password" placeholder="Password" required />
+          <p id="errorMsg" class="errorMsg"></p>
+          <button type="submit">Sign in</button>
+        </form>
+      </div>
+
+      <div id="loggedState" class="formContainer" style="display:none">
+        <p class="hintText">Signed in as</p>
+        <p class="userLabel" id="loggedUser"></p>
+        <button onclick="logout()">Sign out</button>
+      </div>
     </div>
+
+    <div class="container routesContainer" id="routesPanel" style="display:none">
+      <p class="panelTitle">Your Access</p>
+      <div id="routeList" class="routeList"></div>
+      <p id="noRoutes" class="hintText" style="display:none">No routes available.</p>
+    </div>
+
+  </div>
+<script src="script.js"></script>
 </body>
 </html>

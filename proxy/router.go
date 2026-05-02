@@ -52,5 +52,5 @@ func (p *Proxy) route(w http.ResponseWriter, r *http.Request) {
 	slog.Debug("routing",
 		"host", r.Host,
 	)
-	proxy.ServeHTTP(w, r)
+	withAuth(proxy).ServeHTTP(w, r)
 }

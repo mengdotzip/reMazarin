@@ -11,6 +11,34 @@ type APIHandler func(http.ResponseWriter, *http.Request)
 
 var registry = make(map[string]APIHandler)
 
+// InitBuiltin registers the built-in auth and admin API handlers.
+// Do not modify this — add your own handlers in InitApi below.
+func InitBuiltin() error {
+	for _, e := range []struct {
+		name string
+		h    APIHandler
+	}{
+		{"auth/login", HandleLogin},
+		{"auth/logout", HandleLogout},
+		{"auth/register", HandleRegister},
+		{"auth/me", HandleMe},
+		{"auth/routes", HandleUserRoutes},
+		{"admin/users", HandleAdminUsers},
+		{"admin/users/groups", HandleAdminUserGroups},
+		{"admin/groups", HandleAdminGroups},
+		{"admin/invites", HandleAdminInvites},
+		{"admin/routes", HandleAdminRoutes},
+	} {
+		if err := register(e.name, e.h); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// InitApi registers user-defined API handlers.
+// Handlers added here are reachable as /api/<name> on static routes
+// and as the target of type="api" routes in config.toml.
 func InitApi() error {
 	slog.Debug("initializing api handlers")
 
@@ -20,8 +48,8 @@ func InitApi() error {
 	// / /__/ /_/ /\ \  / / / /_/ / /|_/ / / _// /_/ /    / /__  / / _/ // /_/ /    /\ \  /
 	// \___/\____/___/ /_/  \____/_/  /_/ /_/  \____/_/|_/\___/ /_/ /___/\____/_/|_/___/ /
 	/////////////////////////////////////////////////////////////////////////////////////
-	//ADD YOUR CUSTOM FUNCTION HERE//
-	////////////////////////////////
+	// ADD YOUR CUSTOM FUNCTIONS HERE                                                    /
+	/////////////////////////////////////////////////////////////////////////////////////
 	if err := register("example", HandleExample); err != nil {
 		return err
 	}
@@ -29,8 +57,7 @@ func InitApi() error {
 		return err
 	}
 	return nil
-	/////////////////////////////
-	////////////////////////////
+	/////////////////////////////////////////////////////////////////////////////////////
 }
 
 func register(name string, handler APIHandler) error {
