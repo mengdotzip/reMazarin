@@ -106,6 +106,7 @@ func run() error {
 	// (InitAuth ran before SyncRoutes so the initial cache load was empty.)
 	proxy.RefreshCache()
 	api.OnRouteUpdate = proxy.RefreshCache
+	api.RouteStats = proxy.GetRouteStats
 
 	allRoutes, err := store.GetAllRoutes(context.Background())
 	if err != nil {

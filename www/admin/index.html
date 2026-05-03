@@ -12,6 +12,7 @@
     <div class="menuContainer">
       <button data-view="users" class="active">USERS</button>
       <button data-view="routes">ROUTES</button>
+      <button data-view="metrics">METRICS</button>
     </div>
 
     <div class="contentContainer">
@@ -99,6 +100,36 @@
             </div>
             <div id="newRouteMsg" style="display:none;font-size:11px;color:#666;margin-top:6px;padding:0 4px;"></div>
           </content>
+        </div>
+      </div>
+
+      <!-- ── METRICS VIEW ──────────────────────────────────────────────────────── -->
+      <div class="view" id="view-metrics">
+        <div class="metricsContainer">
+
+          <content class="metricsSessions">
+            <div class="panelHeader">
+              <span class="panelTitle">Active Sessions</span>
+              <button class="iconBtn" onclick="loadMetrics()" title="Refresh">↺</button>
+            </div>
+            <div id="sessionItems" class="itemList"></div>
+          </content>
+
+          <content class="metricsRoutes">
+            <div class="panelHeader">
+              <span class="panelTitle">Route Activity</span>
+              <span class="hint">since last restart</span>
+            </div>
+            <div id="routeStatItems" class="itemList"></div>
+          </content>
+
+          <content class="metricsFailures">
+            <div class="panelHeader">
+              <span class="panelTitle">Login Failures</span>
+            </div>
+            <div id="failureItems" class="itemList"></div>
+          </content>
+
         </div>
       </div>
 

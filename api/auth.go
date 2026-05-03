@@ -137,9 +137,11 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "invalid request")
 		return
 	}
+	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	user, err := store.Authenticate(r.Context(), body.Username, body.Password)
 	if err != nil {
 		slog.Warn("login failed", "username", body.Username)
+		store.LogAuthFailure(r.Context(), clientIP, body.Username)
 		fail(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -147,7 +149,6 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	if webRoute, err := store.GetRouteByUrl(r.Context(), authURL); err == nil && webRoute.SessionDuration > 0 {
 		dur = time.Duration(webRoute.SessionDuration) * time.Hour
 	}
-	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	tok, err := store.CreateSession(r.Context(), user.ID, dur, clientIP)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "session error")

@@ -161,3 +161,96 @@ button:active {
 .routeItem a:hover {
     text-decoration: underline;
 }
+
+/* ── Sessions panel ─────────────────────────────────────────────────── */
+.sessionsContainer {
+    width: 240px;
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+}
+
+.sessionList {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.sessionList::-webkit-scrollbar { width: 4px; }
+.sessionList::-webkit-scrollbar-track { background: transparent; }
+.sessionList::-webkit-scrollbar-thumb { background: rgba(45,99,133,0.3); border-radius: 4px; }
+
+.sessionItem {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 14px;
+}
+
+.sessionItem.current {
+    background: rgba(45, 99, 133, 0.12);
+    border-color: rgba(45, 99, 133, 0.3);
+}
+
+.sessionInfo {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.sessionIp {
+    font-family: monospace;
+    font-size: 12px;
+    color: #1e4b69;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sessionCurrent {
+    font-size: 10px;
+    color: #2d6385;
+    background: rgba(45, 99, 133, 0.15);
+    border-radius: 8px;
+    padding: 1px 6px;
+    align-self: flex-start;
+}
+
+.sessionExp {
+    font-size: 10px;
+    color: rgba(45, 99, 133, 0.55);
+}
+
+.sessionRevokeBtn {
+    background: none;
+    border: none;
+    box-shadow: none;
+    color: rgba(192, 57, 43, 0.45);
+    font-size: 16px;
+    padding: 0 2px;
+    height: auto;
+    flex-shrink: 0;
+    transition: color 0.1s;
+}
+
+.sessionRevokeBtn:hover {
+    color: #c0392b;
+    background: none;
+    box-shadow: none;
+    transform: none;
+}
+
+.sessionRevokeBtn:active {
+    background: none;
+    box-shadow: none;
+    transform: none;
+}

@@ -36,6 +36,7 @@ document.querySelectorAll('.menuContainer button').forEach(btn => {
         document.getElementById('view-' + btn.dataset.view).classList.add('active');
         if (btn.dataset.view === 'users') loadUsersView();
         if (btn.dataset.view === 'routes') loadRoutes();
+        if (btn.dataset.view === 'metrics') loadMetrics();
     });
 });
 
@@ -419,4 +420,96 @@ async function deleteRoute(id, url) {
     if (!confirm(`Delete route "${url}"?\nThis cannot be undone.`)) return;
     await api('DELETE', 'admin/routes?id=' + id);
     loadRoutes();
+}
+
+// ── metrics ───────────────────────────────────────────────────────────────
+function relTime(dateStr) {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+    return Math.floor(diff / 86400000) + 'd ago';
+}
+
+function relExpiry(dateStr) {
+    const diff = new Date(dateStr).getTime() - Date.now();
+    if (diff < 0) return 'expired';
+    if (diff < 3600000) return 'expires in ' + Math.floor(diff / 60000) + 'm';
+    if (diff < 86400000) return 'expires in ' + Math.floor(diff / 3600000) + 'h';
+    return 'expires in ' + Math.floor(diff / 86400000) + 'd';
+}
+
+async function loadMetrics() {
+    const data = await api('GET', 'admin/metrics');
+    if (!data) return;
+
+    // Active sessions
+    const sessionList = document.getElementById('sessionItems');
+    sessionList.innerHTML = '';
+    (data.sessions || []).forEach(s => {
+        const el = document.createElement('div');
+        el.className = 'item';
+        el.style.cssText = 'align-items:flex-start;cursor:default;';
+        el.innerHTML = `
+            <div class="sessionRow">
+                <div class="itemMain">${s.username}</div>
+                <div class="sessionMeta">
+                    <span>${s.client_ip}</span>
+                    <span>signed in ${relTime(s.created_at)}</span>
+                    <span>${relExpiry(s.expires_at)}</span>
+                </div>
+            </div>
+            <button class="delBtn" title="Revoke session">×</button>
+        `;
+        el.querySelector('.delBtn').addEventListener('click', async () => {
+            await api('DELETE', 'admin/metrics?id=' + s.id);
+            loadMetrics();
+        });
+        sessionList.appendChild(el);
+    });
+    if (!data.sessions?.length) {
+        sessionList.innerHTML = '<p style="font-size:12px;color:#aaa;margin:10px 0 0 4px">No active sessions.</p>';
+    }
+
+    // Route stats
+    const routeList = document.getElementById('routeStatItems');
+    routeList.innerHTML = '';
+    const stats = data.route_stats || {};
+    const entries = Object.entries(stats).sort((a, b) => b[1] - a[1]);
+    const maxVal = entries[0]?.[1] || 1;
+    entries.forEach(([url, count]) => {
+        const el = document.createElement('div');
+        el.className = 'item';
+        el.style.cssText = 'flex-direction:column;align-items:stretch;cursor:default;gap:4px;';
+        const pct = Math.round((count / maxVal) * 100);
+        el.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+                <div class="itemMain">${url}</div>
+                <span style="font-size:12px;color:#2d6385;flex-shrink:0">${count.toLocaleString()}</span>
+            </div>
+            <div class="statBar"><div class="statBarFill" style="width:${pct}%"></div></div>
+        `;
+        routeList.appendChild(el);
+    });
+    if (!entries.length) {
+        routeList.innerHTML = '<p style="font-size:12px;color:#aaa;margin:10px 0 0 4px">No requests recorded yet.</p>';
+    }
+
+    // Auth failures
+    const failList = document.getElementById('failureItems');
+    failList.innerHTML = '';
+    (data.auth_failures || []).forEach(f => {
+        const el = document.createElement('div');
+        el.className = 'item';
+        el.style.cursor = 'default';
+        el.innerHTML = `
+            <span class="failureIp">${f.ip}</span>
+            <span class="failureUser">${f.username || '—'}</span>
+            <span class="itemSub" style="flex-shrink:0">${relTime(f.created_at)}</span>
+        `;
+        failList.appendChild(el);
+    });
+    if (!data.auth_failures?.length) {
+        failList.innerHTML = '<p style="font-size:12px;color:#aaa;margin:10px 0 0 4px">No failures recorded.</p>';
+    }
 }

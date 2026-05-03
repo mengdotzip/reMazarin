@@ -68,9 +68,15 @@ func withAuth(next http.Handler) http.Handler {
 		route, found := cache[routeKey(r)]
 		cacheMu.RUnlock()
 
+		rk := routeKey(r)
+		serve := func() {
+			RecordRequest(rk)
+			next.ServeHTTP(w, r)
+		}
+
 		// Public: no restrictions at all.
 		if !found || (!route.IPAuth && route.AllowedGroups == "" && route.AllowedIPs == "") {
-			next.ServeHTTP(w, r)
+			serve()
 			return
 		}
 
@@ -90,7 +96,7 @@ func withAuth(next http.Handler) http.Handler {
 					if route.RenewOnAccess {
 						authStore.ExtendSessionByID(r.Context(), sess.ID, routeSessionDur(route))
 					}
-					next.ServeHTTP(w, r)
+					serve()
 					return
 				}
 				// Session found but user not in required group — fall through to other methods.
@@ -100,7 +106,7 @@ func withAuth(next http.Handler) http.Handler {
 
 		// Static IP allowlist: matching IP grants access without a session.
 		if route.AllowedIPs != "" && ipAllows(route.AllowedIPs, clientIP) {
-			next.ServeHTTP(w, r)
+			serve()
 			return
 		}
 
@@ -128,7 +134,7 @@ func withAuth(next http.Handler) http.Handler {
 		if route.RenewOnAccess {
 			authStore.ExtendSession(r.Context(), c.Value, routeSessionDur(route))
 		}
-		next.ServeHTTP(w, r)
+		serve()
 	})
 }
 

@@ -117,6 +117,7 @@ func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUr
 		}
 	}
 
+	RecordRequest(routeUrl)
 	targetConn, err := net.Dial("tcp", targetAddr)
 	if err != nil {
 		slog.Error("tcp: failed to connect to target", "target", targetAddr, "client", clientIP, "error", err)

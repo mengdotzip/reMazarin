@@ -1,16 +1,22 @@
 // ── state ─────────────────────────────────────────────────────────────────────
+let currentSessionId = null;
+
 function showLoggedIn(username) {
     document.getElementById('formState').style.display = 'none';
     document.getElementById('loggedState').style.display = '';
     document.getElementById('loggedUser').textContent = username;
     document.getElementById('routesPanel').style.display = '';
+    document.getElementById('sessionsPanel').style.display = '';
     loadRoutes();
+    loadSessions();
 }
 
 function showLoginForm() {
     document.getElementById('formState').style.display = '';
     document.getElementById('loggedState').style.display = 'none';
     document.getElementById('routesPanel').style.display = 'none';
+    document.getElementById('sessionsPanel').style.display = 'none';
+    currentSessionId = null;
 }
 
 async function loadRoutes() {
@@ -33,6 +39,45 @@ async function loadRoutes() {
         el.innerHTML = `<a href="${scheme}${r.url}" target="_blank">${r.url}</a>`;
         list.appendChild(el);
     });
+}
+
+async function loadSessions() {
+    const res = await fetch('/api/auth/sessions').catch(() => null);
+    if (!res || !res.ok) return;
+    const data = await res.json().catch(() => ({}));
+    currentSessionId = data.current_id;
+    const list = document.getElementById('sessionList');
+    list.innerHTML = '';
+    (data.sessions || []).forEach(s => {
+        const isCurrent = s.id === currentSessionId;
+        const el = document.createElement('div');
+        el.className = 'sessionItem' + (isCurrent ? ' current' : '');
+        const exp = new Date(s.expires_at);
+        const expStr = exp.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        el.innerHTML = `
+            <div class="sessionInfo">
+                <span class="sessionIp">${s.client_ip}</span>
+                ${isCurrent ? '<span class="sessionCurrent">this device</span>' : ''}
+                <span class="sessionExp">until ${expStr}</span>
+            </div>
+            <button class="sessionRevokeBtn" title="${isCurrent ? 'Sign out everywhere' : 'Revoke'}">×</button>
+        `;
+        el.querySelector('.sessionRevokeBtn').addEventListener('click', () => revokeSession(s.id, isCurrent));
+        list.appendChild(el);
+    });
+    if (!data.sessions?.length) {
+        list.innerHTML = '<p style="font-size:11px;color:rgba(45,99,133,0.5);margin:4px 0">No active sessions.</p>';
+    }
+}
+
+async function revokeSession(id, isCurrent) {
+    const res = await fetch('/api/auth/sessions?id=' + id, { method: 'DELETE' }).catch(() => null);
+    if (!res || !res.ok) return;
+    if (isCurrent) {
+        showLoginForm();
+    } else {
+        loadSessions();
+    }
 }
 
 async function logout() {
