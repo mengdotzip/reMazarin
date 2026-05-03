@@ -17,7 +17,11 @@ import (
 var OnRouteUpdate func()
 
 // OnRouteRegister registers (or re-registers) a route in the live proxy.
-var OnRouteRegister func(url, target, routeType string) error
+var OnRouteRegister func(url, target, routeType string, tls bool, cert, key string) error
+
+// DefaultCert and DefaultKey are the fallback TLS certificate paths used when
+// creating UI routes with TLS enabled. Set from the web host config in main.go.
+var DefaultCert, DefaultKey string
 
 // OnRouteDelete removes a route from the live proxy.
 var OnRouteDelete func(url string)
@@ -424,14 +428,14 @@ func HandleAdminInvites(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var body struct {
-			Hours int `json:"hours"`
+			Description string `json:"description"`
+			Hours       int    `json:"hours"`
 		}
 		decode(r, &body)
 		if body.Hours <= 0 {
 			body.Hours = 24
 		}
-		dur := time.Duration(body.Hours) * time.Hour
-		code, inv, err := store.CreateInvite(r.Context(), dur)
+		code, inv, err := store.CreateInvite(r.Context(), body.Description, time.Duration(body.Hours)*time.Hour)
 		if err != nil {
 			fail(w, http.StatusInternalServerError, "db error")
 			return
@@ -478,6 +482,7 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 			URL    string `json:"url"`
 			Target string `json:"target"`
 			Type   string `json:"type"`
+			Tls    bool   `json:"tls"`
 		}
 		if !decode(r, &body) || body.URL == "" || body.Target == "" {
 			fail(w, http.StatusBadRequest, "url and target required")
@@ -486,14 +491,18 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		if body.Type == "" {
 			body.Type = "proxy"
 		}
-		route, err := store.CreateRoute(r.Context(), body.URL, body.Target, body.Type)
+		cert, key := "", ""
+		if body.Tls {
+			cert, key = DefaultCert, DefaultKey
+		}
+		route, err := store.CreateRoute(r.Context(), body.URL, body.Target, body.Type, body.Tls, cert, key)
 		if err != nil {
 			fail(w, http.StatusConflict, "url already in use")
 			return
 		}
 		var regErr string
 		if OnRouteRegister != nil {
-			if err := OnRouteRegister(body.URL, body.Target, body.Type); err != nil {
+			if err := OnRouteRegister(body.URL, body.Target, body.Type, body.Tls, cert, key); err != nil {
 				slog.Warn("route saved but not live", "url", body.URL, "error", err)
 				regErr = err.Error()
 			}
@@ -533,7 +542,7 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		if body.Target != "" && OnRouteRegister != nil {
 			if rt, err := store.GetRouteByID(r.Context(), id); err == nil && rt.Source == "ui" {
 				if err := store.UpdateRouteEndpoint(r.Context(), id, body.Target); err == nil {
-					OnRouteRegister(rt.Url, body.Target, rt.Type)
+					OnRouteRegister(rt.Url, body.Target, rt.Type, rt.Tls, rt.Cert, rt.Key)
 				}
 			}
 		}

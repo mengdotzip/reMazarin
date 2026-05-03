@@ -1,14 +1,23 @@
 body {
-    background-image: url('bg.jpg');
-    background-repeat: no-repeat;
-    background-attachment: fixed;
-    background-size: 100% 100%;
+    background: rgba(15, 35, 55, 0.08);
     height: 100vh;
     display: flex;
     justify-content: center;
     align-items: center;
     overflow: hidden;
     flex-direction: column;
+}
+
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url('bg.jpg');
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+    filter: blur(6px) brightness(0.88);
+    transform: scale(1.06);
+    z-index: -1;
 }
 
 
@@ -377,8 +386,10 @@ content {
     gap: 15px;
 }
 
-.metricsSessions { flex: 2.2; }
-.metricsRoutes   { flex: 1.6; }
+.metricsSessions { flex: 2; }
+.metricsMiddle   { flex: 1.6; display: flex; flex-direction: column; gap: 15px; min-height: 0; }
+.metricsRoutes   { flex: 1; min-height: 0; }
+.metricsAccessLog { flex: 1; min-height: 0; }
 .metricsFailures { flex: 1.6; }
 
 .sessionRow {

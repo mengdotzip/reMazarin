@@ -11,6 +11,7 @@ import (
 type Session struct {
 	ID        int
 	UserID    int
+	Username  string
 	ExpiresAt time.Time
 	CreatedAt time.Time
 }
@@ -38,9 +39,11 @@ func (s *Storage) ValidateSession(ctx context.Context, tok string) (*Session, er
 	hash := sha256hex(tok)
 	var sess Session
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, user_id, expires_at, created_at FROM sessions WHERE token_hash = ? AND expires_at > ?`,
+		`SELECT s.id, s.user_id, u.username, s.expires_at, s.created_at
+		 FROM sessions s JOIN users u ON u.id = s.user_id
+		 WHERE s.token_hash = ? AND s.expires_at > ?`,
 		hash, time.Now(),
-	).Scan(&sess.ID, &sess.UserID, &sess.ExpiresAt, &sess.CreatedAt)
+	).Scan(&sess.ID, &sess.UserID, &sess.Username, &sess.ExpiresAt, &sess.CreatedAt)
 	if err != nil {
 		return nil, xerrors.Newf("invalid or expired session")
 	}
@@ -53,11 +56,12 @@ func (s *Storage) ValidateSession(ctx context.Context, tok string) (*Session, er
 func (s *Storage) ValidateSessionByIP(ctx context.Context, ip string) (*Session, error) {
 	var sess Session
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, user_id, expires_at, created_at FROM sessions
-		 WHERE client_ip = ? AND expires_at > ?
-		 ORDER BY expires_at DESC LIMIT 1`,
+		`SELECT s.id, s.user_id, u.username, s.expires_at, s.created_at
+		 FROM sessions s JOIN users u ON u.id = s.user_id
+		 WHERE s.client_ip = ? AND s.expires_at > ?
+		 ORDER BY s.expires_at DESC LIMIT 1`,
 		ip, time.Now(),
-	).Scan(&sess.ID, &sess.UserID, &sess.ExpiresAt, &sess.CreatedAt)
+	).Scan(&sess.ID, &sess.UserID, &sess.Username, &sess.ExpiresAt, &sess.CreatedAt)
 	if err != nil {
 		return nil, xerrors.Newf("no active session for IP")
 	}

@@ -33,8 +33,11 @@
               <span class="panelTitle">Invites</span>
             </div>
             <div class="createRow">
-              <input type="number" id="inviteHours" value="24" min="1" placeholder="hrs">
-              <button onclick="createInvite()">+ Create</button>
+              <input type="text" id="inviteDesc" placeholder="Description (optional)">
+              <input type="number" id="inviteHours" value="24" min="1" placeholder="hrs" style="width:52px;flex:0 0 52px">
+            </div>
+            <div class="createRow">
+              <button onclick="createInvite()" style="width:100%">+ Create</button>
             </div>
             <div id="newInviteCode" class="inviteCode" style="display:none"></div>
             <div id="inviteItems" class="itemList"></div>
@@ -95,6 +98,11 @@
                 <option value="tcp">tcp (raw TCP)</option>
               </select>
             </div>
+            <div class="createRow" style="gap:10px;align-items:center">
+              <label style="font-size:12px;color:#2d6385;display:flex;align-items:center;gap:5px;cursor:pointer">
+                <input type="checkbox" id="newRouteTls"> TLS
+              </label>
+            </div>
             <div class="createRow">
               <button onclick="createRoute()" style="width:100%">+ Add</button>
             </div>
@@ -115,13 +123,22 @@
             <div id="sessionItems" class="itemList"></div>
           </content>
 
-          <content class="metricsRoutes">
-            <div class="panelHeader">
-              <span class="panelTitle">Route Activity</span>
-              <span class="hint">since last restart</span>
-            </div>
-            <div id="routeStatItems" class="itemList"></div>
-          </content>
+          <div class="metricsMiddle">
+            <content class="metricsRoutes">
+              <div class="panelHeader">
+                <span class="panelTitle">Route Activity</span>
+                <span class="hint">since last restart</span>
+              </div>
+              <div id="routeStatItems" class="itemList"></div>
+            </content>
+            <content class="metricsAccessLog">
+              <div class="panelHeader">
+                <span class="panelTitle">Access Log</span>
+                <span id="accessLogFilter" class="hint" style="cursor:pointer;display:none" onclick="clearAccessFilter()">✕ clear filter</span>
+              </div>
+              <div id="accessLogItems" class="itemList"></div>
+            </content>
+          </div>
 
           <content class="metricsFailures">
             <div class="panelHeader">

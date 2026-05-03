@@ -9,15 +9,16 @@ import (
 )
 
 type Invite struct {
-	ID        int       `json:"id"`
-	Used      bool      `json:"used"`
-	ExpiresAt time.Time `json:"expires_at"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          int       `json:"id"`
+	Description string    `json:"description"`
+	Used        bool      `json:"used"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // CreateInvite generates a one-time invite code valid for dur. It returns the
 // plaintext code (shown once) and the stored invite record.
-func (s *Storage) CreateInvite(ctx context.Context, dur time.Duration) (string, *Invite, error) {
+func (s *Storage) CreateInvite(ctx context.Context, description string, dur time.Duration) (string, *Invite, error) {
 	code := randHex(16)
 	hash := sha256hex(code)
 	exp := time.Now().Add(dur)
@@ -25,9 +26,9 @@ func (s *Storage) CreateInvite(ctx context.Context, dur time.Duration) (string, 
 	var inv Invite
 	inv.ExpiresAt = exp
 	err := s.db.QueryRowContext(ctx,
-		`INSERT INTO invites (code_hash, expires_at) VALUES (?, ?) RETURNING id, used, created_at`,
-		hash, exp,
-	).Scan(&inv.ID, &inv.Used, &inv.CreatedAt)
+		`INSERT INTO invites (code_hash, description, expires_at) VALUES (?, ?, ?) RETURNING id, description, used, created_at`,
+		hash, description, exp,
+	).Scan(&inv.ID, &inv.Description, &inv.Used, &inv.CreatedAt)
 	if err != nil {
 		return "", nil, xerrors.Newf("create invite: %w", err)
 	}
@@ -58,7 +59,7 @@ func (s *Storage) UseInvite(ctx context.Context, code string) (*Invite, error) {
 
 func (s *Storage) GetAllInvites(ctx context.Context) ([]Invite, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, used, expires_at, created_at FROM invites ORDER BY created_at DESC`)
+		`SELECT id, description, used, expires_at, created_at FROM invites ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, xerrors.Newf("query invites: %w", err)
 	}
@@ -67,7 +68,7 @@ func (s *Storage) GetAllInvites(ctx context.Context) ([]Invite, error) {
 	var invites []Invite
 	for rows.Next() {
 		var inv Invite
-		if err := rows.Scan(&inv.ID, &inv.Used, &inv.ExpiresAt, &inv.CreatedAt); err != nil {
+		if err := rows.Scan(&inv.ID, &inv.Description, &inv.Used, &inv.ExpiresAt, &inv.CreatedAt); err != nil {
 			return nil, xerrors.Newf("scan invite: %w", err)
 		}
 		invites = append(invites, inv)

@@ -76,4 +76,15 @@ This means a user who regularly SSHs through an IP-auth TCP route never gets log
 
 ## Registration and invites
 
-New users can only register with a valid invite code generated in the admin panel. Invite codes are time-limited (default 24 hours) and can only be used once.
+New users can only register with a valid invite code generated in the admin panel. Each invite has an optional description (so you can track who it was meant for) and a configurable expiry (default 24 hours). Invite codes are single-use and are cleaned up automatically once expired.
+
+## Metrics
+
+The admin panel **Metrics** tab provides a live view of:
+
+- **Active Sessions** — every currently logged-in user with their IP, sign-in time, and session expiry. Admins can force-revoke any session.
+- **Route Activity** — per-route request counts since the last process start (in-memory, resets on restart).
+- **Access Log** — the last 200 authorized access events: which user/IP accessed which route and when. API calls (`/api/*`) are excluded to reduce noise. TCP connections are also captured.
+- **Login Failures** — recent failed login attempts with the attempted username and source IP.
+
+Users can view and revoke their own sessions from the login page sidebar.

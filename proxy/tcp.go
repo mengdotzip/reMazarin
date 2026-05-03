@@ -89,6 +89,8 @@ func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUr
 	route, found := cache[routeUrl]
 	cacheMu.RUnlock()
 
+	var accessUser string
+
 	if found && (route.IPAuth || route.AllowedIPs != "") {
 		authorized := false
 
@@ -100,8 +102,11 @@ func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUr
 				} else if groups, err := authStore.GetUserGroups(context.Background(), sess.UserID); err == nil {
 					authorized = groupsAllow(route.AllowedGroups, groups)
 				}
-				if authorized && route.RenewOnAccess {
-					authStore.ExtendSessionByID(context.Background(), sess.ID, routeSessionDur(route))
+				if authorized {
+					accessUser = sess.Username
+					if route.RenewOnAccess {
+						authStore.ExtendSessionByID(context.Background(), sess.ID, routeSessionDur(route))
+					}
 				}
 			}
 		}
@@ -118,6 +123,9 @@ func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUr
 	}
 
 	RecordRequest(routeUrl)
+	if authStore != nil {
+		go authStore.LogAccess(context.Background(), clientIP, accessUser, routeUrl)
+	}
 	targetConn, err := net.Dial("tcp", targetAddr)
 	if err != nil {
 		slog.Error("tcp: failed to connect to target", "target", targetAddr, "client", clientIP, "error", err)

@@ -107,6 +107,8 @@ func run() error {
 	proxy.RefreshCache()
 	api.OnRouteUpdate = proxy.RefreshCache
 	api.RouteStats = proxy.GetRouteStats
+	api.DefaultCert = cfg.Web.Cert
+	api.DefaultKey = cfg.Web.Key
 
 	allRoutes, err := store.GetAllRoutes(context.Background())
 	if err != nil {
@@ -125,8 +127,8 @@ func run() error {
 	p := proxy.Proxy{Proxies: proxyRoutes, Wg: &wg}
 
 	// Wire dynamic route callbacks after p is initialised.
-	api.OnRouteRegister = func(url, target, routeType string) error {
-		return p.RegisterRoute(proxy.ProxyRoute{Url: url, Target: target, Type: routeType})
+	api.OnRouteRegister = func(url, target, routeType string, tls bool, cert, key string) error {
+		return p.RegisterRoute(proxy.ProxyRoute{Url: url, Target: target, Type: routeType, Tls: tls, Cert: cert, Key: key})
 	}
 	api.OnRouteDelete = func(url string) { p.UnregisterRoute(url) }
 

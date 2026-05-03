@@ -149,14 +149,14 @@ func (s *Storage) UpdateRouteAccess(ctx context.Context, id int, allowedGroups, 
 }
 
 // CreateRoute adds a new route created via the admin UI (source = 'ui').
-func (s *Storage) CreateRoute(ctx context.Context, url, target, routeType string) (*Route, error) {
+func (s *Storage) CreateRoute(ctx context.Context, url, target, routeType string, tls bool, cert, key string) (*Route, error) {
 	var r Route
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO proxy_routes (url, target, type, source, enabled, cookie_policy)
-		VALUES (?, ?, ?, 'ui', TRUE, 'persistent')
+		INSERT INTO proxy_routes (url, target, type, tls, cert, key, source, enabled, cookie_policy)
+		VALUES (?, ?, ?, ?, ?, ?, 'ui', TRUE, 'persistent')
 		RETURNING id, url, target, type, tls, cert, key, enabled, source,
 		          allowed_groups, allowed_ips, ip_auth, cookie_policy, renew_on_access, session_duration, created_at, updated_at`,
-		url, target, routeType,
+		url, target, routeType, tls, cert, key,
 	).Scan(&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
 		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.CookiePolicy, &r.RenewOnAccess, &r.SessionDuration,
 		&r.CreatedAt, &r.UpdatedAt)

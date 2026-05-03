@@ -31,6 +31,7 @@ func InitAuth(s *storage.Storage) {
 			ctx := context.Background()
 			authStore.CleanupExpiredSessions(ctx)
 			authStore.CleanupExpiredInvites(ctx)
+			authStore.CleanupOldAccessLog(ctx)
 		}
 	}()
 }
@@ -69,18 +70,29 @@ func withAuth(next http.Handler) http.Handler {
 		cacheMu.RUnlock()
 
 		rk := routeKey(r)
+		clientIP := extractClientIP(r)
+
+		// serve proxies the request; authServe also logs the access event.
 		serve := func() {
 			RecordRequest(rk)
 			next.ServeHTTP(w, r)
 		}
+		authServe := func(username string) {
+			go authStore.LogAccess(context.Background(), clientIP, username, rk)
+			serve()
+		}
 
-		// Public: no restrictions at all.
-		if !found || (!route.IPAuth && route.AllowedGroups == "" && route.AllowedIPs == "") {
+		// Route not in cache (e.g. web/admin UI serving its own assets) — pass through.
+		if !found {
 			serve()
 			return
 		}
 
-		clientIP := extractClientIP(r)
+		// Public route: no restrictions configured — log with empty username so abuse is visible.
+		if !route.IPAuth && route.AllowedGroups == "" && route.AllowedIPs == "" {
+			authServe("")
+			return
+		}
 
 		// IP session auth: connecting IP has an active session → grant access.
 		// If allowed_groups is also set, the session user must be in one of those groups.
@@ -96,7 +108,7 @@ func withAuth(next http.Handler) http.Handler {
 					if route.RenewOnAccess {
 						authStore.ExtendSessionByID(r.Context(), sess.ID, routeSessionDur(route))
 					}
-					serve()
+					authServe(sess.Username)
 					return
 				}
 				// Session found but user not in required group — fall through to other methods.
@@ -106,7 +118,7 @@ func withAuth(next http.Handler) http.Handler {
 
 		// Static IP allowlist: matching IP grants access without a session.
 		if route.AllowedIPs != "" && ipAllows(route.AllowedIPs, clientIP) {
-			serve()
+			authServe("")
 			return
 		}
 
@@ -134,7 +146,7 @@ func withAuth(next http.Handler) http.Handler {
 		if route.RenewOnAccess {
 			authStore.ExtendSession(r.Context(), c.Value, routeSessionDur(route))
 		}
-		serve()
+		authServe(sess.Username)
 	})
 }
 

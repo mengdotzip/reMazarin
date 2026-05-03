@@ -1,0 +1,1 @@
+ALTER TABLE invites ADD COLUMN description TEXT NOT NULL DEFAULT '';

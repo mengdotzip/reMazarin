@@ -166,11 +166,13 @@ async function loadInvites() {
     (data.invites || []).forEach(inv => {
         const el = document.createElement('div');
         el.className = 'item';
-        const exp = new Date(inv.expires_at).toLocaleDateString();
+        const exp = new Date(inv.expires_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
         el.innerHTML = `
-            <div class="itemMain">#${inv.id}</div>
+            <div style="flex:1;min-width:0">
+                <div class="itemMain">${inv.description || '(no description)'}</div>
+                <div class="itemSub">expires ${exp}</div>
+            </div>
             <span class="tag${inv.used ? ' used' : ''}">${inv.used ? 'used' : 'active'}</span>
-            <div class="itemSub">exp ${exp}</div>
             ${!inv.used ? `<button class="delBtn" title="Delete">×</button>` : ''}
         `;
         el.querySelector('.delBtn')?.addEventListener('click', () => deleteInvite(inv.id));
@@ -179,9 +181,11 @@ async function loadInvites() {
 }
 
 async function createInvite() {
+    const description = document.getElementById('inviteDesc').value.trim();
     const hours = parseInt(document.getElementById('inviteHours').value) || 24;
-    const data = await api('POST', 'admin/invites', { hours });
+    const data = await api('POST', 'admin/invites', { description, hours });
     if (!data) return;
+    document.getElementById('inviteDesc').value = '';
     const box = document.getElementById('newInviteCode');
     box.style.display = '';
     box.textContent = data.code;
@@ -398,6 +402,7 @@ async function createRoute() {
     const url    = document.getElementById('newRouteUrl').value.trim();
     const target = document.getElementById('newRouteTarget').value.trim();
     const type   = document.getElementById('newRouteType').value || 'proxy';
+    const tls    = document.getElementById('newRouteTls').checked;
     const msg    = document.getElementById('newRouteMsg');
     msg.style.display = 'none';
     if (!url || !target) {
@@ -405,7 +410,7 @@ async function createRoute() {
         msg.textContent = 'URL and target are required.';
         return;
     }
-    const data = await api('POST', 'admin/routes', { url, target, type });
+    const data = await api('POST', 'admin/routes', { url, target, type, tls });
     if (!data) return;
     document.getElementById('newRouteUrl').value = '';
     document.getElementById('newRouteTarget').value = '';
@@ -423,6 +428,43 @@ async function deleteRoute(id, url) {
 }
 
 // ── metrics ───────────────────────────────────────────────────────────────
+let metricsAccessLogData = [];
+
+function renderAccessLog(routeFilter) {
+    const accessList = document.getElementById('accessLogItems');
+    const filterLabel = document.getElementById('accessLogFilter');
+    const entries = routeFilter
+        ? metricsAccessLogData.filter(e => e.route_url === routeFilter)
+        : metricsAccessLogData;
+    if (routeFilter) {
+        filterLabel.textContent = `✕ ${routeFilter}`;
+        filterLabel.style.display = '';
+    } else {
+        filterLabel.style.display = 'none';
+    }
+    accessList.innerHTML = '';
+    entries.forEach(e => {
+        const el = document.createElement('div');
+        el.className = 'item';
+        el.style.cursor = 'default';
+        el.innerHTML = `
+            <span class="failureIp">${e.ip}</span>
+            <span class="failureUser" style="color:#1e4b69">${e.username || '—'}</span>
+            <span class="itemSub" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.route_url}</span>
+            <span class="itemSub" style="flex-shrink:0">${relTime(e.created_at)}</span>
+        `;
+        accessList.appendChild(el);
+    });
+    if (!entries.length) {
+        accessList.innerHTML = '<p style="font-size:12px;color:#aaa;margin:10px 0 0 4px">No access events yet.</p>';
+    }
+}
+
+function clearAccessFilter() {
+    document.querySelectorAll('#routeStatItems .item').forEach(i => i.classList.remove('selected'));
+    renderAccessLog(null);
+}
+
 function relTime(dateStr) {
     const diff = Date.now() - new Date(dateStr).getTime();
     if (diff < 60000) return 'just now';
@@ -477,10 +519,13 @@ async function loadMetrics() {
     const stats = data.route_stats || {};
     const entries = Object.entries(stats).sort((a, b) => b[1] - a[1]);
     const maxVal = entries[0]?.[1] || 1;
+    metricsAccessLogData = data.access_log || [];
+    let activeRouteFilter = null;
+
     entries.forEach(([url, count]) => {
         const el = document.createElement('div');
         el.className = 'item';
-        el.style.cssText = 'flex-direction:column;align-items:stretch;cursor:default;gap:4px;';
+        el.style.cssText = 'flex-direction:column;align-items:stretch;gap:4px;';
         const pct = Math.round((count / maxVal) * 100);
         el.innerHTML = `
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
@@ -489,11 +534,25 @@ async function loadMetrics() {
             </div>
             <div class="statBar"><div class="statBarFill" style="width:${pct}%"></div></div>
         `;
+        el.addEventListener('click', () => {
+            const isSelected = el.classList.contains('selected');
+            document.querySelectorAll('#routeStatItems .item').forEach(i => i.classList.remove('selected'));
+            if (isSelected) {
+                activeRouteFilter = null;
+                el.classList.remove('selected');
+            } else {
+                activeRouteFilter = url;
+                el.classList.add('selected');
+            }
+            renderAccessLog(activeRouteFilter);
+        });
         routeList.appendChild(el);
     });
     if (!entries.length) {
         routeList.innerHTML = '<p style="font-size:12px;color:#aaa;margin:10px 0 0 4px">No requests recorded yet.</p>';
     }
+
+    renderAccessLog(null);
 
     // Auth failures
     const failList = document.getElementById('failureItems');

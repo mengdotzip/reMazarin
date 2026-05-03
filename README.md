@@ -52,8 +52,9 @@ On first run the database is seeded with:
 |---------|----------------|
 | Users   | View users, assign/remove group membership, delete users |
 | Groups  | Create and delete groups |
-| Invites | Generate invite codes (time-limited) for new user registration |
-| Routes  | Set allowed groups and/or IP allowlists per route, configure cookie lifetime |
+| Invites | Generate invite codes with an optional description and configurable expiry (default 24 h) |
+| Routes  | Set allowed groups and/or IP allowlists per route, configure cookie lifetime and session duration |
+| Metrics | Live view of active sessions, per-route request counts, access log (last 200 events), and login failures |
 
 Routes with no groups and no IPs assigned are **public**. Routes can be restricted by:
 
@@ -90,3 +91,7 @@ See [docs/migrations.md](docs/migrations.md) for the migration history and instr
 ## Registration
 
 New users register at `<web-host>/register` using an invite code generated in the admin panel.
+
+## Session management
+
+After signing in, the login page shows a **Sessions** sidebar listing all active sessions for the current user (IP address, expiry). Any session can be revoked individually — useful if you logged in on a mobile connection and forgot to sign out. Revoking the current session logs you out immediately.

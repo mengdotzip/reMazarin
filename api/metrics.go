@@ -38,10 +38,19 @@ func HandleAdminMetrics(w http.ResponseWriter, r *http.Request) {
 		if stats == nil {
 			stats = map[string]int64{}
 		}
+		accessLog, err := store.GetRecentAccess(r.Context(), 2000)
+		if err != nil {
+			fail(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		if accessLog == nil {
+			accessLog = []storage.AccessEvent{}
+		}
 		ok(w, map[string]any{
 			"sessions":      sessions,
 			"route_stats":   stats,
 			"auth_failures": failures,
+			"access_log":    accessLog,
 		})
 
 	case http.MethodDelete:

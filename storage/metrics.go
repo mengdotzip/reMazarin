@@ -100,3 +100,40 @@ func (s *Storage) AdminDeleteSession(ctx context.Context, sessionID int) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID)
 	return err
 }
+
+// ── access log ────────────────────────────────────────────────────────────────
+
+type AccessEvent struct {
+	ID        int       `json:"id"`
+	IP        string    `json:"ip"`
+	Username  string    `json:"username"`
+	RouteUrl  string    `json:"route_url"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (s *Storage) LogAccess(ctx context.Context, ip, username, routeUrl string) {
+	s.db.ExecContext(ctx,
+		`INSERT INTO access_log (ip, username, route_url) VALUES (?, ?, ?)`,
+		ip, username, routeUrl)
+}
+
+func (s *Storage) GetRecentAccess(ctx context.Context, limit int) ([]AccessEvent, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, ip, username, route_url, created_at FROM access_log ORDER BY created_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, xerrors.Newf("query access_log: %w", err)
+	}
+	defer rows.Close()
+	var out []AccessEvent
+	for rows.Next() {
+		var e AccessEvent
+		rows.Scan(&e.ID, &e.IP, &e.Username, &e.RouteUrl, &e.CreatedAt)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func (s *Storage) CleanupOldAccessLog(ctx context.Context) {
+	s.db.ExecContext(ctx,
+		`DELETE FROM access_log WHERE id NOT IN (SELECT id FROM access_log ORDER BY created_at DESC LIMIT 5000)`)
+}

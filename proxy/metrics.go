@@ -7,7 +7,7 @@ import (
 
 var routeCounters sync.Map // string → *int64
 
-// RecordRequest increments the in-memory request counter for the given route URL.
+// RecordRequest increments the in-memory request counter for routeUrl.
 // Counters reset on process restart.
 func RecordRequest(routeUrl string) {
 	v, _ := routeCounters.LoadOrStore(routeUrl, new(int64))
