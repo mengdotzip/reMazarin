@@ -40,8 +40,8 @@ type ConfigRoute struct {
 }
 
 // SyncRoutes reconciles DB routes with the config file. Config routes are
-// upserted, preserving any access-control settings already stored in the DB.
-// Routes removed from config are disabled (not deleted) so their settings survive restarts.
+// upserted (preserving access-control settings) and config routes no longer
+// present in the file are deleted.
 func (s *Storage) SyncRoutes(routes []ConfigRoute) error {
 	slog.Info("syncing routes", "count", len(routes))
 
@@ -50,11 +50,6 @@ func (s *Storage) SyncRoutes(routes []ConfigRoute) error {
 		return xerrors.Newf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
-
-	// Disable all config-sourced routes first; the upsert re-enables those still present.
-	if _, err := tx.Exec(`UPDATE proxy_routes SET enabled = FALSE WHERE source = 'config'`); err != nil {
-		return xerrors.Newf("disable config routes: %w", err)
-	}
 
 	for _, r := range routes {
 		_, err := tx.Exec(`
@@ -71,6 +66,23 @@ func (s *Storage) SyncRoutes(routes []ConfigRoute) error {
 		`, r.Url, r.Target, r.Type, r.Tls, r.Cert, r.Key)
 		if err != nil {
 			return xerrors.Newf("upsert route %s: %w", r.Url, err)
+		}
+	}
+
+	// Delete config routes no longer present in the config file.
+	if len(routes) == 0 {
+		if _, err := tx.Exec(`DELETE FROM proxy_routes WHERE source = 'config'`); err != nil {
+			return xerrors.Newf("delete removed config routes: %w", err)
+		}
+	} else {
+		placeholders := strings.Repeat("?,", len(routes))
+		placeholders = placeholders[:len(placeholders)-1]
+		args := make([]any, len(routes))
+		for i, r := range routes {
+			args[i] = r.Url
+		}
+		if _, err := tx.Exec(`DELETE FROM proxy_routes WHERE source = 'config' AND url NOT IN (`+placeholders+`)`, args...); err != nil {
+			return xerrors.Newf("delete removed config routes: %w", err)
 		}
 	}
 
