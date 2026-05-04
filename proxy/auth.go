@@ -124,18 +124,18 @@ func withAuth(next http.Handler) http.Handler {
 
 		// Cookie-based group auth.
 		if route.AllowedGroups == "" {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
 			return
 		}
 
 		c, err := r.Cookie("session")
 		if err != nil {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
 			return
 		}
 		sess, err := authStore.ValidateSession(r.Context(), c.Value)
 		if err != nil {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
 			return
 		}
 		groups, err := authStore.GetUserGroups(r.Context(), sess.UserID)
