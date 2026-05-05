@@ -31,6 +31,7 @@ func InitBuiltin() error {
 		{"admin/routes", HandleAdminRoutes},
 		{"admin/metrics", HandleAdminMetrics},
 		{"auth/sessions", HandleUserSessions},
+		{"auth/extend", HandleExtendSession},
 	} {
 		if err := register(e.name, e.h); err != nil {
 			return err

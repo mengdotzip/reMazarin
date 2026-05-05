@@ -268,3 +268,46 @@ button:active {
     box-shadow: none;
     transform: none;
 }
+
+/* ── Route renew controls ────────────────────────────────────────────── */
+.routeRenewBtn {
+    background: rgba(45, 99, 133, 0.12);
+    border: 1px solid rgba(45, 99, 133, 0.28);
+    border-radius: 10px;
+    color: #1e4b69;
+    font-size: 11px;
+    height: auto;
+    padding: 2px 7px;
+    flex-shrink: 0;
+    box-shadow: none;
+    transition: background 0.1s;
+    white-space: nowrap;
+}
+
+.routeRenewBtn:hover {
+    background: rgba(45, 99, 133, 0.28);
+    box-shadow: none;
+    transform: none;
+}
+
+.routeRenewBtn:active {
+    background: rgba(30, 75, 105, 0.42);
+    box-shadow: none;
+    transform: none;
+}
+
+.routeRenewBtn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.routeAutoTag {
+    font-size: 10px;
+    color: #1a5070;
+    background: rgba(45, 99, 133, 0.12);
+    border: 1px solid rgba(45, 99, 133, 0.2);
+    border-radius: 8px;
+    padding: 2px 6px;
+    flex-shrink: 0;
+    white-space: nowrap;
+}

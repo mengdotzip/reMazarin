@@ -19,6 +19,27 @@ function showLoginForm() {
     currentSessionId = null;
 }
 
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+function fmtDur(hours) {
+    if (!hours || hours <= 0) return '7d';
+    if (hours < 24) return `${hours}h`;
+    const d = Math.floor(hours / 24), h = hours % 24;
+    return h ? `${d}d ${h}h` : `${d}d`;
+}
+
+function fmtRemaining(expiresAt) {
+    const ms = new Date(expiresAt) - Date.now();
+    if (ms <= 0) return 'expired';
+    const totalMin = Math.floor(ms / 60000);
+    const h = Math.floor(totalMin / 60), m = totalMin % 60;
+    if (h >= 48) { const d = Math.floor(h / 24); return `${d}d ${h % 24}h`; }
+    if (h >= 1) return `${h}h ${m}m`;
+    return `${m}m`;
+}
+
+// ── routes ────────────────────────────────────────────────────────────────────
+
 async function loadRoutes() {
     const res = await fetch('/api/auth/routes').catch(() => null);
     if (!res || !res.ok) return;
@@ -36,10 +57,33 @@ async function loadRoutes() {
         const el = document.createElement('div');
         el.className = 'routeItem';
         const scheme = r.tls ? 'https://' : 'http://';
-        el.innerHTML = `<a href="${scheme}${r.url}" target="_blank">${r.url}</a>`;
+        const durLabel = fmtDur(r.session_duration);
+        if (r.renew_on_access) {
+            el.innerHTML = `
+                <a href="${scheme}${r.url}" target="_blank">${r.url}</a>
+                <span class="routeAutoTag" title="Session auto-renews for ${durLabel} on each access">↺ ${durLabel}</span>
+            `;
+        } else {
+            el.innerHTML = `
+                <a href="${scheme}${r.url}" target="_blank">${r.url}</a>
+                <button class="routeRenewBtn" title="Extend session by ${durLabel}">↺ ${durLabel}</button>
+            `;
+            el.querySelector('.routeRenewBtn').addEventListener('click', () => extendSession(r.url, el));
+        }
         list.appendChild(el);
     });
 }
+
+async function extendSession(routeUrl, el) {
+    const btn = el.querySelector('.routeRenewBtn');
+    if (btn) btn.disabled = true;
+    const res = await fetch('/api/auth/extend?url=' + encodeURIComponent(routeUrl), { method: 'POST' }).catch(() => null);
+    if (btn) btn.disabled = false;
+    if (!res || !res.ok) return;
+    loadSessions();
+}
+
+// ── sessions ──────────────────────────────────────────────────────────────────
 
 async function loadSessions() {
     const res = await fetch('/api/auth/sessions').catch(() => null);
@@ -52,13 +96,14 @@ async function loadSessions() {
         const isCurrent = s.id === currentSessionId;
         const el = document.createElement('div');
         el.className = 'sessionItem' + (isCurrent ? ' current' : '');
-        const exp = new Date(s.expires_at);
-        const expStr = exp.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        const expStr = isCurrent
+            ? `${fmtRemaining(s.expires_at)} left`
+            : `until ${new Date(s.expires_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
         el.innerHTML = `
             <div class="sessionInfo">
                 <span class="sessionIp">${s.client_ip}</span>
                 ${isCurrent ? '<span class="sessionCurrent">this device</span>' : ''}
-                <span class="sessionExp">until ${expStr}</span>
+                <span class="sessionExp">${expStr}</span>
             </div>
             <button class="sessionRevokeBtn" title="${isCurrent ? 'Sign out everywhere' : 'Revoke'}">×</button>
         `;

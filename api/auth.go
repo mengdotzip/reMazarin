@@ -247,26 +247,79 @@ func HandleUserRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type routeInfo struct {
-		URL string `json:"url"`
-		Tls bool   `json:"tls"`
+		URL             string `json:"url"`
+		Tls             bool   `json:"tls"`
+		SessionDuration int    `json:"session_duration"`
+		RenewOnAccess   bool   `json:"renew_on_access"`
 	}
+	// Exclude the proxy/auth page itself by comparing hostnames.
+	selfHost := strings.SplitN(r.Host, ":", 2)[0]
 	var accessible []routeInfo
 	for _, rt := range routes {
-		// Skip routes targeting local files (auth page, admin page, etc.)
-		if strings.HasPrefix(rt.Target, "./") || strings.HasPrefix(rt.Target, "/") {
+		// Skip tcp routes and internal API handlers — not browser-navigable.
+		if rt.Type == "tcp" || rt.Type == "api" {
 			continue
 		}
-		if rt.Type == "tcp" {
+		// Skip this proxy/auth page.
+		if strings.SplitN(rt.Url, ":", 2)[0] == selfHost {
 			continue
 		}
 		if storage.RouteAllows(rt.AllowedGroups, groupIDs) {
-			accessible = append(accessible, routeInfo{rt.Url, rt.Tls})
+			accessible = append(accessible, routeInfo{rt.Url, rt.Tls, rt.SessionDuration, rt.RenewOnAccess})
 		}
 	}
 	if accessible == nil {
 		accessible = []routeInfo{}
 	}
 	ok(w, map[string]any{"routes": accessible})
+}
+
+// HandleExtendSession extends the current session using a specific route's
+// session_duration. The caller must have access to the named route.
+// POST /api/auth/extend?url=<route-url>
+func HandleExtendSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		fail(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	sess, err := sessionFromRequest(r)
+	if err != nil {
+		fail(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	routeURL := r.URL.Query().Get("url")
+	if routeURL == "" {
+		fail(w, http.StatusBadRequest, "url required")
+		return
+	}
+	rt, err := store.GetRouteByUrl(r.Context(), routeURL)
+	if err != nil {
+		fail(w, http.StatusNotFound, "route not found")
+		return
+	}
+	groups, err := store.GetUserGroups(r.Context(), sess.UserID)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	groupIDs := make([]int, len(groups))
+	for i, g := range groups {
+		groupIDs[i] = g.ID
+	}
+	if !storage.RouteAllows(rt.AllowedGroups, groupIDs) {
+		fail(w, http.StatusForbidden, "access denied")
+		return
+	}
+	dur := time.Duration(rt.SessionDuration) * time.Hour
+	if dur <= 0 {
+		dur = defaultSessionDur
+	}
+	store.ExtendSessionByID(r.Context(), sess.ID, dur)
+	// Refresh the browser cookie so it doesn't expire before the DB session.
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		setSession(w, r, c.Value, dur)
+	}
+	ok(w, map[string]any{"expires_at": time.Now().Add(dur)})
 }
 
 // ---- admin: users -----------------------------------------------------------
