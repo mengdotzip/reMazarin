@@ -151,36 +151,38 @@
 
         <div class="metricsContainer">
 
-          <content class="metricsSessions">
+
+          <content class="metricsAccessLog">
+            <div class="panelHeader">
+              <span class="panelTitle">Access Log</span>
+              <span id="accessLogCount" class="hint"></span>
+            </div>
+            <div id="accessLogItems" class="itemList"></div>
+          </content>
+
+          <div class="metricsMiddle">
+            <content class="metricsFailures">
+              <div class="panelHeader">
+                <span class="panelTitle">Login Failures</span>
+                <span id="failureCount" class="hint"></span>
+              </div>
+            <div id="failureItems" class="itemList"></div>
+          </content>
+            <content class="metricsSessions">
             <div class="panelHeader">
               <span class="panelTitle">Active Sessions</span>
             </div>
             <div id="sessionItems" class="itemList"></div>
           </content>
-
-          <div class="metricsMiddle">
-            <content class="metricsRoutes">
-              <div class="panelHeader">
-                <span class="panelTitle">Route Activity</span>
-                <span class="hint">since last restart — click to filter</span>
-              </div>
-              <div id="routeStatItems" class="itemList"></div>
-            </content>
-            <content class="metricsAccessLog">
-              <div class="panelHeader">
-                <span class="panelTitle">Access Log</span>
-                <span id="accessLogCount" class="hint"></span>
-              </div>
-              <div id="accessLogItems" class="itemList"></div>
-            </content>
           </div>
 
-          <content class="metricsFailures">
+          
+          <content class="metricsRoutes">
             <div class="panelHeader">
-              <span class="panelTitle">Login Failures</span>
-              <span id="failureCount" class="hint"></span>
+              <span class="panelTitle">Route Activity</span>
+              <span class="hint">since last restart — click to filter</span>
             </div>
-            <div id="failureItems" class="itemList"></div>
+            <div id="routeStatItems" class="itemList"></div>
           </content>
 
         </div>

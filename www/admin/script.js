@@ -24,7 +24,7 @@ async function api(method, path, body) {
         document.body.innerHTML = '<p style="text-align:center;margin-top:40vh;color:#c0392b">Access denied — admin group required.</p>';
         return null;
     }
-    return res.ok ? res.json() : null;
+    return res.json().catch(() => null); 
 }
 
 // ── menu view switching ───────────────────────────────────────────────────
@@ -417,9 +417,13 @@ async function createRoute() {
     }
     const data = await api('POST', 'admin/routes', { url, target, type, tls });
     if (!data) return;
+    msg.style.display = '';
+    if (data.error) {
+        msg.textContent = `✗ ${data.error}`;
+        return; // inputs intentionally kept so user can correct and retry
+    }
     document.getElementById('newRouteUrl').value = '';
     document.getElementById('newRouteTarget').value = '';
-    msg.style.display = '';
     msg.textContent = data.warning
         ? `Saved — ${data.warning}`
         : '✓ Route added and live.';

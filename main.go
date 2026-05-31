@@ -19,7 +19,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/runtime"
 )
 
-const version = "0.1.0"
+const version = "0.1.1"
 
 func main() {
 	if err := run(); err != nil {
