@@ -35,7 +35,7 @@ document.querySelectorAll('.menuContainer button').forEach(btn => {
         btn.classList.add('active');
         document.getElementById('view-' + btn.dataset.view).classList.add('active');
         if (btn.dataset.view === 'users') loadUsersView();
-        if (btn.dataset.view === 'routes') loadRoutes();
+        if (btn.dataset.view === 'routes') { loadRoutes(); loadSettings(); }
         if (btn.dataset.view === 'metrics') loadMetrics();
     });
 });
@@ -350,27 +350,10 @@ function buildRouteEditPanel(route, groups) {
         </div>
     ` : `<div class="routeEditRow" style="color:#888;font-size:11px;font-style:italic;padding-left:118px">Cookie auth not available for TCP routes.</div>`;
 
-    const renewRow = `
-        <div class="routeEditRow">
-            <label>Renew on access</label>
-            <input type="checkbox" class="renewCheck" ${route.renew_on_access ? 'checked' : ''}>
-        </div>
-    `;
-
-    const durationRow = `
-        <div class="routeEditRow">
-            <label>Session duration</label>
-            <input type="number" class="durationInput" value="${route.session_duration || 168}" min="1" style="width:80px"> hours
-            <span style="font-size:11px;color:#888;margin-left:6px">default 168 h = 7 days</span>
-        </div>
-    `;
-
     panel.innerHTML = `
         ${targetRow}
         ${ipAuthRows}
         ${cookieRows}
-        ${renewRow}
-        ${durationRow}
         <div class="routeEditActions">
             <button onclick="this.closest('.routeEdit').style.display='none'">Cancel</button>
             <button class="saveBtn">Save</button>
@@ -380,11 +363,9 @@ function buildRouteEditPanel(route, groups) {
     panel.querySelector('.saveBtn').addEventListener('click', async () => {
         const checked = [...panel.querySelectorAll('.groupCheckList input:checked')].map(el => el.value);
         const body = {
-            ip_auth:          panel.querySelector('.ipAuthCheck').checked,
-            allowed_groups:   checked.join(','),
-            allowed_ips:      (panel.querySelector('.ipsInput')?.value || '').trim(),
-            renew_on_access:  panel.querySelector('.renewCheck').checked,
-            session_duration: parseInt(panel.querySelector('.durationInput').value) || 168,
+            ip_auth:        panel.querySelector('.ipAuthCheck').checked,
+            allowed_groups: checked.join(','),
+            allowed_ips:    (panel.querySelector('.ipsInput')?.value || '').trim(),
         };
         if (!isTcp) {
             body.cookie_policy = panel.querySelector('select').value;
@@ -396,6 +377,30 @@ function buildRouteEditPanel(route, groups) {
     });
 
     return panel;
+}
+
+function onRouteTypeChange() {
+    const isTcp = document.getElementById('newRouteType').value === 'tcp';
+    document.getElementById('newRouteTlsRow').style.display = isTcp ? 'none' : '';
+    if (isTcp) document.getElementById('newRouteTls').checked = false;
+}
+
+async function loadSettings() {
+    const data = await api('GET', 'admin/settings');
+    if (!data) return;
+    const s = data.settings || {};
+    document.getElementById('settingsDuration').value = s.session_duration_hours || 168;
+    document.getElementById('settingsRenew').checked = !!s.renew_on_access;
+}
+
+async function saveSettings() {
+    const dur = parseInt(document.getElementById('settingsDuration').value) || 168;
+    const renew = document.getElementById('settingsRenew').checked;
+    const msg = document.getElementById('settingsMsg');
+    const data = await api('PUT', 'admin/settings', { session_duration_hours: dur, renew_on_access: renew });
+    msg.style.display = '';
+    msg.textContent = data ? '✓ Saved' : 'Save failed';
+    setTimeout(() => { msg.style.display = 'none'; }, 2000);
 }
 
 async function createRoute() {
@@ -429,40 +434,132 @@ async function deleteRoute(id, url) {
 
 // ── metrics ───────────────────────────────────────────────────────────────
 let metricsAccessLogData = [];
+let metricsFailureData   = [];
 
-function renderAccessLog(routeFilter) {
-    const accessList = document.getElementById('accessLogItems');
-    const filterLabel = document.getElementById('accessLogFilter');
-    const entries = routeFilter
-        ? metricsAccessLogData.filter(e => e.route_url === routeFilter)
-        : metricsAccessLogData;
-    if (routeFilter) {
-        filterLabel.textContent = `✕ ${routeFilter}`;
-        filterLabel.style.display = '';
-    } else {
-        filterLabel.style.display = 'none';
-    }
-    accessList.innerHTML = '';
+function getMetricsFilters() {
+    return {
+        username: document.getElementById('filterUsername')?.value.trim().toLowerCase() || '',
+        ip:       document.getElementById('filterIP')?.value.trim().toLowerCase() || '',
+        route:    document.getElementById('filterRoute')?.value.trim().toLowerCase() || '',
+        status:   document.getElementById('filterStatus')?.value || '',
+    };
+}
+
+function applyMetricsFilters() {
+    const f = getMetricsFilters();
+    renderAccessLog(f);
+    renderFailures(f);
+}
+
+function clearMetricsFilters() {
+    document.getElementById('filterUsername').value = '';
+    document.getElementById('filterIP').value = '';
+    document.getElementById('filterRoute').value = '';
+    document.getElementById('filterStatus').value = '';
+    document.querySelectorAll('#routeStatItems .item').forEach(i => i.classList.remove('selected'));
+    applyMetricsFilters();
+}
+
+function accessEventBadge(username) {
+    if (!username) return '<span class="evtBadge anon" data-status="anon">anon</span>';
+    if (isDenied(username)) return '<span class="evtBadge denied" data-status="denied">denied</span>';
+    return `<span class="evtBadge ok" data-status="ok">${username}</span>`;
+}
+
+function isDenied(u) { return u === 'Unauthorized User' || u === 'Unauthorized'; }
+function isAnon(u)   { return !u; }
+function isOk(u)     { return !!u && !isDenied(u); }
+
+function renderAccessLog(filters) {
+    const { username, ip, route, status } = filters || {};
+    let entries = metricsAccessLogData;
+    if (username) entries = entries.filter(e => (e.username || '').toLowerCase().includes(username));
+    if (ip)       entries = entries.filter(e => e.ip.toLowerCase().includes(ip));
+    if (route)    entries = entries.filter(e => e.route_url.toLowerCase().includes(route));
+    if (status === 'denied') entries = entries.filter(e => isDenied(e.username));
+    if (status === 'anon')   entries = entries.filter(e => isAnon(e.username));
+    if (status === 'ok')     entries = entries.filter(e => isOk(e.username));
+
+    document.getElementById('accessLogCount').textContent =
+        entries.length < metricsAccessLogData.length
+            ? `${entries.length} / ${metricsAccessLogData.length}`
+            : `${metricsAccessLogData.length}`;
+
+    const list = document.getElementById('accessLogItems');
+    list.innerHTML = '';
     entries.forEach(e => {
         const el = document.createElement('div');
         el.className = 'item';
         el.style.cursor = 'default';
         el.innerHTML = `
             <span class="failureIp">${e.ip}</span>
-            <span class="failureUser" style="color:#1e4b69">${e.username || '—'}</span>
-            <span class="itemSub" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.route_url}</span>
+            ${accessEventBadge(e.username)}
+            <span class="itemSub" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${e.route_url}">${e.route_url}</span>
             <span class="itemSub" style="flex-shrink:0">${relTime(e.created_at)}</span>
         `;
-        accessList.appendChild(el);
+        el.addEventListener('click', ev => {
+            const badge = ev.target.closest('[data-status]');
+            if (badge) {
+                // Clicking the badge toggles the status filter.
+                const sel = document.getElementById('filterStatus');
+                sel.value = sel.value === badge.dataset.status ? '' : badge.dataset.status;
+            } else {
+                // Clicking anywhere else on the row pre-fills the IP filter.
+                document.getElementById('filterIP').value = e.ip;
+            }
+            applyMetricsFilters();
+        });
+        el.style.cursor = 'pointer';
+        list.appendChild(el);
     });
     if (!entries.length) {
-        accessList.innerHTML = '<p style="font-size:12px;color:#aaa;margin:10px 0 0 4px">No access events yet.</p>';
+        list.innerHTML = '<p style="font-size:12px;color:#aaa;margin:10px 0 0 4px">No matching events.</p>';
     }
 }
 
-function clearAccessFilter() {
-    document.querySelectorAll('#routeStatItems .item').forEach(i => i.classList.remove('selected'));
-    renderAccessLog(null);
+function renderFailures(filters) {
+    const { username, ip, route } = filters || {};
+    let entries = metricsFailureData;
+
+    if (username) entries = entries.filter(f => (f.username || '').toLowerCase().includes(username));
+    if (ip)       entries = entries.filter(f => f.ip.toLowerCase().includes(ip));
+
+    // Route filter: cross-reference — show failures from IPs seen in matching access log entries.
+    if (route) {
+        const routeIPs = new Set(
+            metricsAccessLogData
+                .filter(e => e.route_url.toLowerCase().includes(route))
+                .map(e => e.ip)
+        );
+        entries = entries.filter(f => routeIPs.has(f.ip));
+    }
+
+    document.getElementById('failureCount').textContent =
+        entries.length < metricsFailureData.length
+            ? `${entries.length} / ${metricsFailureData.length}`
+            : `${metricsFailureData.length}`;
+
+    const list = document.getElementById('failureItems');
+    list.innerHTML = '';
+    entries.forEach(f => {
+        const el = document.createElement('div');
+        el.className = 'item';
+        el.style.cursor = 'pointer';
+        el.innerHTML = `
+            <span class="failureIp">${f.ip}</span>
+            <span class="failureUser">${f.username || '—'}</span>
+            <span class="itemSub" style="flex-shrink:0">${relTime(f.created_at)}</span>
+        `;
+        // Clicking a failure pre-fills the IP filter.
+        el.addEventListener('click', () => {
+            document.getElementById('filterIP').value = f.ip;
+            applyMetricsFilters();
+        });
+        list.appendChild(el);
+    });
+    if (!entries.length) {
+        list.innerHTML = '<p style="font-size:12px;color:#aaa;margin:10px 0 0 4px">No matching failures.</p>';
+    }
 }
 
 function relTime(dateStr) {
@@ -513,16 +610,18 @@ async function loadMetrics() {
         sessionList.innerHTML = '<p style="font-size:12px;color:#aaa;margin:10px 0 0 4px">No active sessions.</p>';
     }
 
-    // Route stats
+    // Store raw data for filtering
+    metricsAccessLogData = data.access_log || [];
+    metricsFailureData   = data.auth_failures || [];
+
+    // Route stats — clicking sets the route filter input
     const routeList = document.getElementById('routeStatItems');
     routeList.innerHTML = '';
     const stats = data.route_stats || {};
-    const entries = Object.entries(stats).sort((a, b) => b[1] - a[1]);
-    const maxVal = entries[0]?.[1] || 1;
-    metricsAccessLogData = data.access_log || [];
-    let activeRouteFilter = null;
+    const statEntries = Object.entries(stats).sort((a, b) => b[1] - a[1]);
+    const maxVal = statEntries[0]?.[1] || 1;
 
-    entries.forEach(([url, count]) => {
+    statEntries.forEach(([url, count]) => {
         const el = document.createElement('div');
         el.className = 'item';
         el.style.cssText = 'flex-direction:column;align-items:stretch;gap:4px;';
@@ -535,40 +634,22 @@ async function loadMetrics() {
             <div class="statBar"><div class="statBarFill" style="width:${pct}%"></div></div>
         `;
         el.addEventListener('click', () => {
+            const routeInput = document.getElementById('filterRoute');
             const isSelected = el.classList.contains('selected');
             document.querySelectorAll('#routeStatItems .item').forEach(i => i.classList.remove('selected'));
             if (isSelected) {
-                activeRouteFilter = null;
-                el.classList.remove('selected');
+                routeInput.value = '';
             } else {
-                activeRouteFilter = url;
+                routeInput.value = url;
                 el.classList.add('selected');
             }
-            renderAccessLog(activeRouteFilter);
+            applyMetricsFilters();
         });
         routeList.appendChild(el);
     });
-    if (!entries.length) {
+    if (!statEntries.length) {
         routeList.innerHTML = '<p style="font-size:12px;color:#aaa;margin:10px 0 0 4px">No requests recorded yet.</p>';
     }
 
-    renderAccessLog(null);
-
-    // Auth failures
-    const failList = document.getElementById('failureItems');
-    failList.innerHTML = '';
-    (data.auth_failures || []).forEach(f => {
-        const el = document.createElement('div');
-        el.className = 'item';
-        el.style.cursor = 'default';
-        el.innerHTML = `
-            <span class="failureIp">${f.ip}</span>
-            <span class="failureUser">${f.username || '—'}</span>
-            <span class="itemSub" style="flex-shrink:0">${relTime(f.created_at)}</span>
-        `;
-        failList.appendChild(el);
-    });
-    if (!data.auth_failures?.length) {
-        failList.innerHTML = '<p style="font-size:12px;color:#aaa;margin:10px 0 0 4px">No failures recorded.</p>';
-    }
+    applyMetricsFilters();
 }

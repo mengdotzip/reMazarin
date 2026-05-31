@@ -19,6 +19,10 @@ var OnRouteUpdate func()
 // OnRouteRegister registers (or re-registers) a route in the live proxy.
 var OnRouteRegister func(url, target, routeType string, tls bool, cert, key string) error
 
+// OnRouteValidate is called before persisting a new route to check for
+// conflicts with the live proxy state (port conflicts, invalid format).
+var OnRouteValidate func(url, routeType string) error
+
 // DefaultCert and DefaultKey are the fallback TLS certificate paths used when
 // creating UI routes with TLS enabled. Set from the web host config in main.go.
 var DefaultCert, DefaultKey string
@@ -149,9 +153,10 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	dur := defaultSessionDur
-	if webRoute, err := store.GetRouteByUrl(r.Context(), authURL); err == nil && webRoute.SessionDuration > 0 {
-		dur = time.Duration(webRoute.SessionDuration) * time.Hour
+	settings, _ := store.GetSettings(r.Context())
+	dur := settings.SessionDur()
+	if dur <= 0 {
+		dur = defaultSessionDur
 	}
 	tok, err := store.CreateSession(r.Context(), user.ID, dur, clientIP)
 	if err != nil {
@@ -310,10 +315,8 @@ func HandleExtendSession(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusForbidden, "access denied")
 		return
 	}
-	dur := time.Duration(rt.SessionDuration) * time.Hour
-	if dur <= 0 {
-		dur = defaultSessionDur
-	}
+	settings, _ := store.GetSettings(r.Context())
+	dur := settings.SessionDur()
 	store.ExtendSessionByID(r.Context(), sess.ID, dur)
 	// Refresh the browser cookie so it doesn't expire before the DB session.
 	if c, err := r.Cookie(sessionCookie); err == nil {
@@ -544,6 +547,17 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		if body.Type == "" {
 			body.Type = "proxy"
 		}
+		// TCP routes do not terminate TLS — ignore the flag if set.
+		if body.Type == "tcp" {
+			body.Tls = false
+		}
+		// Validate against the live proxy state before touching the DB.
+		if OnRouteValidate != nil {
+			if err := OnRouteValidate(body.URL, body.Type); err != nil {
+				fail(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
 		cert, key := "", ""
 		if body.Tls {
 			cert, key = DefaultCert, DefaultKey
@@ -620,6 +634,44 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 		if OnRouteUpdate != nil {
 			OnRouteUpdate()
+		}
+		ok(w, map[string]bool{"ok": true})
+
+	default:
+		fail(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+// ---- admin: global settings -------------------------------------------------
+
+func HandleAdminSettings(w http.ResponseWriter, r *http.Request) {
+	if requireAdmin(w, r) == nil {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		s, err := store.GetSettings(r.Context())
+		if err != nil {
+			fail(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		ok(w, map[string]any{"settings": s})
+
+	case http.MethodPut:
+		var body struct {
+			SessionDurationHours int  `json:"session_duration_hours"`
+			RenewOnAccess        bool `json:"renew_on_access"`
+		}
+		if !decode(r, &body) {
+			fail(w, http.StatusBadRequest, "invalid request")
+			return
+		}
+		if err := store.UpdateSettings(r.Context(), body.SessionDurationHours, body.RenewOnAccess); err != nil {
+			fail(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		if OnRouteUpdate != nil {
+			OnRouteUpdate() // refreshes auth cache including globalSettings
 		}
 		ok(w, map[string]bool{"ok": true})
 

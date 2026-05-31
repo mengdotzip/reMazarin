@@ -4,7 +4,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"reMazarin/api"
 	"strings"
 )
 
@@ -29,34 +28,14 @@ func (p *Proxy) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ls.mu.RLock()
-	route, routeFound := ls.Routes[host]
-	handler, handlerFound := ls.ProxyCache[host]
-	ls.mu.RUnlock()
-
-	if !routeFound {
+	handlers := ls.handlers.Load().(map[string]http.Handler)
+	handler, ok := handlers[host]
+	if !ok {
 		slog.Debug("requested url does not exist", "url", host)
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return
 	}
-	if !handlerFound {
-		slog.Error("proxy not cached", "host", host)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	// Built-in /api/ handlers (auth, admin) are injected only for the hosts
-	// explicitly marked InjectAPI at startup (the [web] and [admin] hosts).
-	// All other routes — including static ones — must have /api/ forwarded
-	// to their backend unchanged.
-	if route.InjectAPI && strings.HasPrefix(r.URL.Path, "/api/") {
-		name := strings.TrimPrefix(r.URL.Path, "/api/")
-		if apiHandler, err := api.Get(name); err == nil {
-			apiHandler(w, r)
-			return
-		}
-	}
 
 	slog.Debug("routing", "host", r.Host)
-	withAuth(handler).ServeHTTP(w, r)
+	handler.ServeHTTP(w, r)
 }

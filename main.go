@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"reMazarin/api"
@@ -20,7 +19,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/runtime"
 )
 
-const version = "0.0.1"
+const version = "0.1.0"
 
 func main() {
 	if err := run(); err != nil {
@@ -81,7 +80,10 @@ func run() error {
 		scheme = "https"
 	}
 	api.SetAuthURL(scheme + "://" + cfg.Web.Url)
-	proxy.InitAuth(store)
+	// stopAuth must be deferred before store.Close so that the log drainer
+	// flushes buffered entries while the DB is still open (LIFO defer order).
+	stopAuth := proxy.InitAuth(ctx, store)
+	defer stopAuth()
 
 	configRoutes := make([]storage.ConfigRoute, len(cfg.Routes))
 	for i, r := range cfg.Routes {
@@ -132,15 +134,16 @@ func run() error {
 	}
 	api.OnRouteDelete = func(url string) { p.UnregisterRoute(url) }
 
-	servers, err := p.StartProxy(ctx, cfg.Otel.Enabled)
-	if err != nil {
+	api.OnRouteValidate = p.ValidateRoute
+
+	if err := p.StartProxy(ctx, cfg.Otel.Enabled); err != nil {
 		return xerrors.Newf("start proxy: %w", err)
 	}
 
-	return cleanShutdown(ctx, p.Wg, p.ErrChan, servers)
+	return cleanShutdown(ctx, p.Wg, p.ErrChan, p.ShutdownHTTP)
 }
 
-func cleanShutdown(ctx context.Context, wg *sync.WaitGroup, errChan chan error, servers []*http.Server) error {
+func cleanShutdown(ctx context.Context, wg *sync.WaitGroup, errChan chan error, shutdownHTTP func(context.Context)) error {
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
@@ -161,11 +164,7 @@ func cleanShutdown(ctx context.Context, wg *sync.WaitGroup, errChan chan error, 
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	for _, s := range servers {
-		if err := s.Shutdown(shutdownCtx); err != nil {
-			slog.Warn("server shutdown error", "addr", s.Addr, "error", err)
-		}
-	}
+	shutdownHTTP(shutdownCtx)
 
 	select {
 	case <-done:

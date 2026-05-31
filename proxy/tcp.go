@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"reMazarin/storage"
 	"sync"
 
 	"github.com/mdobak/go-xerrors"
@@ -85,9 +86,8 @@ func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUr
 	defer clientConn.Close()
 	clientIP, _, _ := net.SplitHostPort(clientConn.RemoteAddr().String())
 
-	cacheMu.RLock()
-	route, found := cache[routeUrl]
-	cacheMu.RUnlock()
+	m := authCache.Load().(map[string]cachedRoute)
+	route, found := m[routeUrl]
 
 	var accessUser string
 
@@ -96,16 +96,13 @@ func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUr
 
 		// IP session auth: connecting IP must have an active session.
 		if route.IPAuth && authStore != nil {
-			if sess, err := authStore.ValidateSessionByIP(context.Background(), clientIP); err == nil {
-				if route.AllowedGroups == "" {
-					authorized = true
-				} else if groups, err := authStore.GetUserGroups(context.Background(), sess.UserID); err == nil {
-					authorized = groupsAllow(route.AllowedGroups, groups)
-				}
+			if sg, err := authStore.ValidateSessionByIPAndGroups(context.Background(), clientIP); err == nil {
+				authorized = len(route.groupSet) == 0 || groupsAllow(route.groupSet, sg.GroupIDs)
 				if authorized {
-					accessUser = sess.Username
-					if route.RenewOnAccess {
-						authStore.ExtendSessionByID(context.Background(), sess.ID, routeSessionDur(route))
+					accessUser = sg.Username
+					gs := globalSettings.Load().(storage.Settings)
+					if gs.RenewOnAccess {
+						authStore.ExtendSessionByID(context.Background(), sg.ID, gs.SessionDur())
 					}
 				}
 			}
@@ -113,10 +110,11 @@ func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUr
 
 		// Static IP allowlist fallback.
 		if !authorized && route.AllowedIPs != "" {
-			authorized = ipAllows(route.AllowedIPs, clientIP)
+			authorized = ipAllows(route, clientIP)
 		}
 
 		if !authorized {
+			logAccess(clientIP, "Unauthorized User", routeUrl)
 			slog.Warn("tcp: connection rejected, not authorized", "client", clientIP, "route", routeUrl)
 			return
 		}
@@ -124,7 +122,7 @@ func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUr
 
 	RecordRequest(routeUrl)
 	if authStore != nil {
-		go authStore.LogAccess(context.Background(), clientIP, accessUser, routeUrl)
+		logAccess(clientIP, accessUser, routeUrl)
 	}
 	targetConn, err := net.Dial("tcp", targetAddr)
 	if err != nil {

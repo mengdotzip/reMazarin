@@ -29,6 +29,7 @@ func InitBuiltin() error {
 		{"admin/groups", HandleAdminGroups},
 		{"admin/invites", HandleAdminInvites},
 		{"admin/routes", HandleAdminRoutes},
+		{"admin/settings", HandleAdminSettings},
 		{"admin/metrics", HandleAdminMetrics},
 		{"auth/sessions", HandleUserSessions},
 		{"auth/extend", HandleExtendSession},

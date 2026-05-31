@@ -31,8 +31,19 @@ func New(path string) (*Storage, error) {
 		return nil, xerrors.Newf("open database: %w", err)
 	}
 
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	// WAL mode lets readers proceed concurrently with the single writer.
+	// busy_timeout makes writers retry instead of immediately failing with SQLITE_BUSY.
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
+		db.Close()
+		return nil, xerrors.Newf("set wal mode: %w", err)
+	}
+	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
+		db.Close()
+		return nil, xerrors.Newf("set busy timeout: %w", err)
+	}
+
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
 	db.SetConnMaxLifetime(0)
 
 	s := &Storage{db: db}

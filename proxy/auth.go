@@ -8,36 +8,71 @@ import (
 	"reMazarin/storage"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
 var (
-	authStore *storage.Storage
+	authStore      *storage.Storage
+	authCache      atomic.Value // stores map[string]cachedRoute
+	globalSettings atomic.Value // stores storage.Settings
 
-	cacheMu sync.RWMutex
-	cache   map[string]storage.Route // "host:port" → route
+	logChan = make(chan logEntry, 512)
 )
 
-func InitAuth(s *storage.Storage) {
+type logEntry struct {
+	ip, username, route string
+}
+
+type cachedRoute struct {
+	storage.Route
+	groupSet     map[string]struct{} // pre-parsed from AllowedGroups ("1","3",…)
+	allowedAddrs []net.IP            // pre-parsed plain IPs from AllowedIPs
+	allowedNets  []*net.IPNet        // pre-parsed CIDR ranges from AllowedIPs
+}
+
+// InitAuth initialises the auth subsystem and returns a stop function.
+// The stop function must be called after all request handlers have stopped
+// (i.e. after cleanShutdown) and before the storage is closed, so that
+// buffered log entries are flushed to the DB and the ticker does not run
+// cleanup queries on a closed connection.
+func InitAuth(ctx context.Context, s *storage.Storage) func() {
 	authStore = s
-	cache = make(map[string]storage.Route)
+	globalSettings.Store(storage.Settings{SessionDurationHours: 168, RenewOnAccess: true})
 	refreshCache()
+
+	logDrained := make(chan struct{})
+	go func() {
+		defer close(logDrained)
+		for e := range logChan {
+			authStore.LogAccess(context.Background(), e.ip, e.username, e.route)
+		}
+	}()
+
 	go func() {
 		t := time.NewTicker(5 * time.Minute)
 		defer t.Stop()
-		for range t.C {
-			refreshCache()
-			ctx := context.Background()
-			authStore.CleanupExpiredSessions(ctx)
-			authStore.CleanupExpiredInvites(ctx)
-			authStore.CleanupOldAccessLog(ctx)
+		for {
+			select {
+			case <-t.C:
+				refreshCache()
+				bctx := context.Background()
+				authStore.CleanupExpiredSessions(bctx)
+				authStore.CleanupExpiredInvites(bctx)
+				authStore.CleanupOldAccessLog(bctx)
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
+
+	return func() {
+		close(logChan)
+		<-logDrained
+	}
 }
 
 // RefreshCache forces an immediate reload of the route/auth cache from the database.
-// Call this after any route access-control update that should take effect right away.
 func RefreshCache() { refreshCache() }
 
 func refreshCache() {
@@ -46,133 +81,152 @@ func refreshCache() {
 		slog.Error("auth cache refresh failed", "error", err)
 		return
 	}
-	m := make(map[string]storage.Route, len(routes))
+	m := make(map[string]cachedRoute, len(routes))
 	for _, r := range routes {
-		m[r.Url] = r
+		m[r.Url] = parseCachedRoute(r)
 	}
-	cacheMu.Lock()
-	cache = m
-	cacheMu.Unlock()
+	authCache.Store(m)
+
+	if s, err := authStore.GetSettings(context.Background()); err == nil {
+		globalSettings.Store(s)
+	}
 	slog.Debug("auth cache refreshed", "routes", len(routes))
 }
 
-// withAuth wraps a handler with session/group and IP-based validation.
-// Routes with empty allowed_groups and empty allowed_ips are public.
-func withAuth(next http.Handler) http.Handler {
+func parseCachedRoute(r storage.Route) cachedRoute {
+	cr := cachedRoute{Route: r}
+	if r.AllowedGroups != "" {
+		cr.groupSet = make(map[string]struct{})
+		for _, p := range strings.Split(r.AllowedGroups, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				cr.groupSet[p] = struct{}{}
+			}
+		}
+	}
+	for _, entry := range strings.Split(r.AllowedIPs, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			if _, n, err := net.ParseCIDR(entry); err == nil {
+				cr.allowedNets = append(cr.allowedNets, n)
+			}
+		} else if ip := net.ParseIP(entry); ip != nil {
+			cr.allowedAddrs = append(cr.allowedAddrs, ip)
+		}
+	}
+	return cr
+}
+
+// withAuthForKey returns a handler pre-bound to rk that enforces access control.
+// The closure is created once at route registration — no per-request allocation.
+func withAuthForKey(rk string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if authStore == nil {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		cacheMu.RLock()
-		route, found := cache[routeKey(r)]
-		cacheMu.RUnlock()
-
-		rk := routeKey(r)
+		m := authCache.Load().(map[string]cachedRoute)
+		route, found := m[rk]
 		clientIP := extractClientIP(r)
 
-		// serve proxies the request; authServe also logs the access event.
-		serve := func() {
+		if !found {
+			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
+			slog.Debug("request not found in routes cache", "route", rk, "ip", clientIP)
+			logAccess(clientIP, "Unauthorized User", rk)
+			return
+		}
+
+		// Public route: no restrictions configured.
+		if !route.IPAuth && route.AllowedGroups == "" && route.AllowedIPs == "" {
+			logAccess(clientIP, "", rk)
 			RecordRequest(rk)
 			next.ServeHTTP(w, r)
-		}
-		authServe := func(username string) {
-			go authStore.LogAccess(context.Background(), clientIP, username, rk)
-			serve()
-		}
-
-		// Route not in cache (e.g. web/admin UI serving its own assets) — pass through.
-		if !found {
-			serve()
 			return
 		}
 
-		// Public route: no restrictions configured — log with empty username so abuse is visible.
-		if !route.IPAuth && route.AllowedGroups == "" && route.AllowedIPs == "" {
-			authServe("")
-			return
-		}
+		gs := globalSettings.Load().(storage.Settings)
 
-		// IP session auth: connecting IP has an active session → grant access.
-		// If allowed_groups is also set, the session user must be in one of those groups.
+		// IP session auth: connecting IP must have an active session.
 		if route.IPAuth {
-			if sess, err := authStore.ValidateSessionByIP(r.Context(), clientIP); err == nil {
-				authorized := route.AllowedGroups == ""
+			if sg, err := authStore.ValidateSessionByIPAndGroups(r.Context(), clientIP); err == nil {
+				authorized := len(route.groupSet) == 0
 				if !authorized {
-					if groups, err := authStore.GetUserGroups(r.Context(), sess.UserID); err == nil {
-						authorized = groupsAllow(route.AllowedGroups, groups)
-					}
+					authorized = groupsAllow(route.groupSet, sg.GroupIDs)
 				}
 				if authorized {
-					if route.RenewOnAccess {
-						authStore.ExtendSessionByID(r.Context(), sess.ID, routeSessionDur(route))
+					if gs.RenewOnAccess {
+						authStore.ExtendSessionByID(r.Context(), sg.ID, gs.SessionDur())
 					}
-					authServe(sess.Username)
+					logAccess(clientIP, sg.Username, rk)
+					RecordRequest(rk)
+					next.ServeHTTP(w, r)
 					return
 				}
-				// Session found but user not in required group — fall through to other methods.
+				// Session found but user not in required group — fall through.
 			}
 			// No active session for this IP — fall through.
 		}
 
 		// Static IP allowlist: matching IP grants access without a session.
-		if route.AllowedIPs != "" && ipAllows(route.AllowedIPs, clientIP) {
-			authServe("")
+		if route.AllowedIPs != "" && ipAllows(route, clientIP) {
+			logAccess(clientIP, "", rk)
+			RecordRequest(rk)
+			next.ServeHTTP(w, r)
 			return
 		}
 
 		// Cookie-based group auth.
-		if route.AllowedGroups == "" {
+		if len(route.groupSet) == 0 {
 			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
+			logAccess(clientIP, "Unauthorized User", rk)
+			RecordRequest(rk)
 			return
 		}
 
 		c, err := r.Cookie("session")
 		if err != nil {
 			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
+			logAccess(clientIP, "Unauthorized User", rk)
+			RecordRequest(rk)
 			return
 		}
-		sess, err := authStore.ValidateSession(r.Context(), c.Value)
+		sg, err := authStore.ValidateSessionAndGroups(r.Context(), c.Value)
 		if err != nil {
 			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
+			logAccess(clientIP, "Unauthorized User", rk)
+			RecordRequest(rk)
 			return
 		}
-		groups, err := authStore.GetUserGroups(r.Context(), sess.UserID)
-		if err != nil || !groupsAllow(route.AllowedGroups, groups) {
+		if !groupsAllow(route.groupSet, sg.GroupIDs) {
 			http.Error(w, "Forbidden", http.StatusForbidden)
+			logAccess(clientIP, "Unauthorized User", rk)
+			RecordRequest(rk)
 			return
 		}
-		if route.RenewOnAccess {
-			authStore.ExtendSession(r.Context(), c.Value, routeSessionDur(route))
+		if gs.RenewOnAccess {
+			authStore.ExtendSession(r.Context(), c.Value, gs.SessionDur())
 		}
-		authServe(sess.Username)
+		logAccess(clientIP, sg.Username, rk)
+		RecordRequest(rk)
+		next.ServeHTTP(w, r)
 	})
 }
 
-// routeKey normalises r.Host to "host:port" to match stored route URLs.
-func routeKey(r *http.Request) string {
-	h := strings.ToLower(r.Host)
-	if _, _, err := net.SplitHostPort(h); err == nil {
-		return h
+func logAccess(ip, username, route string) {
+	select {
+	case logChan <- logEntry{ip, username, route}:
+	default:
+		// Drop rather than stall the request handler if the log queue is full.
 	}
-	if r.TLS != nil {
-		return h + ":443"
-	}
-	return h + ":80"
 }
 
-// groupsAllow returns true if any of the user's groups appear in the
-// comma-separated allowed group-ID list.
-func groupsAllow(allowed string, groups []storage.Group) bool {
-	set := make(map[string]bool)
-	for _, part := range strings.Split(allowed, ",") {
-		if p := strings.TrimSpace(part); p != "" {
-			set[p] = true
-		}
-	}
-	for _, g := range groups {
-		if set[strconv.Itoa(g.ID)] {
+// groupsAllow returns true if any of the user's group IDs appear in the pre-parsed set.
+func groupsAllow(groupSet map[string]struct{}, groupIDs []int) bool {
+	for _, id := range groupIDs {
+		if _, ok := groupSet[strconv.Itoa(id)]; ok {
 			return true
 		}
 	}
@@ -188,36 +242,20 @@ func extractClientIP(r *http.Request) string {
 	return ip
 }
 
-// routeSessionDur returns the session renewal duration for the route.
-// Falls back to 7 days when session_duration is not set.
-func routeSessionDur(route storage.Route) time.Duration {
-	if route.SessionDuration > 0 {
-		return time.Duration(route.SessionDuration) * time.Hour
-	}
-	return 7 * 24 * time.Hour
-}
-
-// ipAllows returns true if clientIP matches any entry in the comma-separated
-// allowedIPs list (plain IPs or CIDR ranges).
-func ipAllows(allowedIPs, clientIP string) bool {
+// ipAllows returns true if clientIP matches any pre-parsed entry in cr.
+func ipAllows(cr cachedRoute, clientIP string) bool {
 	addr := net.ParseIP(clientIP)
 	if addr == nil {
 		return false
 	}
-	for _, entry := range strings.Split(allowedIPs, ",") {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
+	for _, ip := range cr.allowedAddrs {
+		if ip.Equal(addr) {
+			return true
 		}
-		if strings.Contains(entry, "/") {
-			_, network, err := net.ParseCIDR(entry)
-			if err == nil && network.Contains(addr) {
-				return true
-			}
-		} else {
-			if ip := net.ParseIP(entry); ip != nil && ip.Equal(addr) {
-				return true
-			}
+	}
+	for _, n := range cr.allowedNets {
+		if n.Contains(addr) {
+			return true
 		}
 	}
 	return false

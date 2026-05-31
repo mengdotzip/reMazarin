@@ -5,8 +5,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"reMazarin/api"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/mdobak/go-xerrors"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -23,13 +25,13 @@ type ProxyRoute struct {
 }
 
 type listenServer struct {
-	Port       string
-	Tls        bool
-	CertPath   string
-	KeyPath    string
-	mu         sync.RWMutex
-	Routes     map[string]*ProxyRoute
-	ProxyCache map[string]http.Handler
+	Port     string
+	Tls      bool
+	CertPath string
+	KeyPath  string
+	mu       sync.Mutex // serialises writes to Routes; hot-path reads use handlers
+	Routes   map[string]*ProxyRoute
+	handlers atomic.Value // stores map[string]http.Handler
 }
 
 type Proxy struct {
@@ -37,29 +39,29 @@ type Proxy struct {
 	servers     map[string]*listenServer
 	tcpCancels  map[string]context.CancelFunc
 	tcpMu       sync.Mutex
+	serversMu   sync.Mutex
+	liveHTTP    []*http.Server
 	ctx         context.Context
 	Wg          *sync.WaitGroup
 	ErrChan     chan error
 	otelEnabled bool
 }
 
-func (p *Proxy) StartProxy(ctx context.Context, otel bool) ([]*http.Server, error) {
+func (p *Proxy) StartProxy(ctx context.Context, otel bool) error {
 	p.ctx = ctx
 	p.otelEnabled = otel
 
-	slog.Info("starting proxies",
-		"count", len(p.Proxies),
-	)
+	slog.Info("starting proxies", "count", len(p.Proxies))
 
 	p.servers = make(map[string]*listenServer)
 	p.tcpCancels = make(map[string]context.CancelFunc)
 
 	if err := p.parseProxies(); err != nil {
-		return nil, xerrors.Newf("parse proxies: %w", err)
+		return xerrors.Newf("parse proxies: %w", err)
 	}
 
 	if err := p.initProxies(otel); err != nil {
-		return nil, xerrors.Newf("init proxies: %w", err)
+		return xerrors.Newf("init proxies: %w", err)
 	}
 
 	tcpCount := 0
@@ -68,9 +70,9 @@ func (p *Proxy) StartProxy(ctx context.Context, otel bool) ([]*http.Server, erro
 			tcpCount++
 		}
 	}
-	p.ErrChan = make(chan error, len(p.servers)+tcpCount)
+	p.ErrChan = make(chan error, len(p.servers)+tcpCount+16)
 
-	servers := p.startListeners()
+	p.startListeners()
 
 	for _, route := range p.Proxies {
 		if route.Type == "tcp" {
@@ -79,7 +81,46 @@ func (p *Proxy) StartProxy(ctx context.Context, otel bool) ([]*http.Server, erro
 		}
 	}
 
-	return servers, nil
+	return nil
+}
+
+// ShutdownHTTP gracefully shuts down all live HTTP listeners.
+func (p *Proxy) ShutdownHTTP(ctx context.Context) {
+	p.serversMu.Lock()
+	servers := make([]*http.Server, len(p.liveHTTP))
+	copy(servers, p.liveHTTP)
+	p.serversMu.Unlock()
+	for _, s := range servers {
+		if err := s.Shutdown(ctx); err != nil {
+			slog.Warn("server shutdown error", "addr", s.Addr, "error", err)
+		}
+	}
+}
+
+// ValidateRoute checks whether a new route is compatible with the live proxy:
+// valid host:port format, known type, and no port conflicts between HTTP and TCP.
+func (p *Proxy) ValidateRoute(url, routeType string) error {
+	_, port, err := parseHostPort(url)
+	if err != nil {
+		return xerrors.Newf("invalid url %q: expected host:port", url)
+	}
+	switch routeType {
+	case "proxy", "tcp", "static", "api", "":
+	default:
+		return xerrors.Newf("unknown route type %q", routeType)
+	}
+	p.tcpMu.Lock()
+	_, hasTCP := p.tcpCancels[port]
+	p.tcpMu.Unlock()
+	if routeType != "tcp" && hasTCP {
+		return xerrors.Newf("port %s is already used by a TCP route", port)
+	}
+	if routeType == "tcp" {
+		if _, hasHTTP := p.servers[port]; hasHTTP {
+			return xerrors.Newf("port %s is already used by an HTTP route", port)
+		}
+	}
+	return nil
 }
 
 func (p *Proxy) parseProxies() error {
@@ -142,12 +183,11 @@ func (p *Proxy) parseProxies() error {
 		}
 
 		ls := listenServer{
-			Port:       port,
-			Tls:        route.Tls,
-			CertPath:   route.Cert,
-			KeyPath:    route.Key,
-			Routes:     make(map[string]*ProxyRoute),
-			ProxyCache: make(map[string]http.Handler),
+			Port:     port,
+			Tls:      route.Tls,
+			CertPath: route.Cert,
+			KeyPath:  route.Key,
+			Routes:   make(map[string]*ProxyRoute),
 		}
 		ls.Routes[host] = &route
 		p.servers[port] = &ls
@@ -166,14 +206,16 @@ func (p *Proxy) parseProxies() error {
 func (p *Proxy) initProxies(otel bool) error {
 	slog.Info("initializing reverse proxies")
 	for port, server := range p.servers {
+		m := make(map[string]http.Handler, len(server.Routes))
 		for host, route := range server.Routes {
-			handler, err := createHandlerForRoute(route, otel)
+			raw, err := createHandlerForRoute(route, otel)
 			if err != nil {
 				return xerrors.Newf("create handler for %s: %w", route.Url, err)
 			}
-			server.ProxyCache[host] = handler
+			m[host] = wrapRouteHandler(route, raw)
 			slog.Debug("handler cached", "host", host, "port", port, "type", route.Type)
 		}
+		server.handlers.Store(m)
 	}
 	slog.Info("all proxies initialized", "count", len(p.Proxies))
 	return nil
@@ -219,17 +261,46 @@ func (p *Proxy) RegisterRoute(route ProxyRoute) error {
 
 	ls, ok := p.servers[port]
 	if !ok {
-		return xerrors.Newf("no active listener on port %s — route saved, restart to activate", port)
+		// Check no TCP listener already owns this port.
+		p.tcpMu.Lock()
+		_, hasTCP := p.tcpCancels[port]
+		p.tcpMu.Unlock()
+		if hasTCP {
+			return xerrors.Newf("port %s is already used by a TCP route", port)
+		}
+		ls = &listenServer{
+			Port:     port,
+			Tls:      route.Tls,
+			CertPath: route.Cert,
+			KeyPath:  route.Key,
+			Routes:   make(map[string]*ProxyRoute),
+		}
+		ls.handlers.Store(make(map[string]http.Handler))
+		p.servers[port] = ls
+		if err := p.startListener(ls); err != nil {
+			delete(p.servers, port)
+			return xerrors.Newf("start listener on port %s: %w", port, err)
+		}
+		slog.Info("new http listener started", "port", port)
 	}
-	handler, err := createHandlerForRoute(&route, p.otelEnabled)
+	raw, err := createHandlerForRoute(&route, p.otelEnabled)
 	if err != nil {
 		return xerrors.Newf("create handler: %w", err)
 	}
 	r := route
+	finalHandler := wrapRouteHandler(&r, raw)
+
 	ls.mu.Lock()
 	ls.Routes[host] = &r
-	ls.ProxyCache[host] = handler
+	old := ls.handlers.Load().(map[string]http.Handler)
+	newMap := make(map[string]http.Handler, len(old)+1)
+	for k, v := range old {
+		newMap[k] = v
+	}
+	newMap[host] = finalHandler
+	ls.handlers.Store(newMap)
 	ls.mu.Unlock()
+
 	slog.Info("route registered", "url", route.Url)
 	return nil
 }
@@ -245,7 +316,14 @@ func (p *Proxy) UnregisterRoute(url string) {
 	if ok {
 		ls.mu.Lock()
 		delete(ls.Routes, host)
-		delete(ls.ProxyCache, host)
+		old := ls.handlers.Load().(map[string]http.Handler)
+		newMap := make(map[string]http.Handler, len(old))
+		for k, v := range old {
+			if k != host {
+				newMap[k] = v
+			}
+		}
+		ls.handlers.Store(newMap)
 		ls.mu.Unlock()
 		slog.Info("route unregistered", "url", url)
 		return
@@ -254,6 +332,32 @@ func (p *Proxy) UnregisterRoute(url string) {
 	// Not an HTTP route — stop TCP proxy if one exists on this port.
 	p.stopTCPProxy(port)
 	slog.Info("tcp route unregistered", "url", url)
+}
+
+// wrapRouteHandler applies auth middleware (and API injection for InjectAPI routes)
+// once at registration time so the router hot path just calls ServeHTTP.
+func wrapRouteHandler(route *ProxyRoute, raw http.Handler) http.Handler {
+	h := withAuthForKey(route.Url, raw)
+	if route.InjectAPI {
+		h = withAPIInject(h)
+	}
+	return h
+}
+
+// withAPIInject intercepts /api/<name> requests and dispatches them to the
+// registered API handler, bypassing the auth middleware and the backend proxy.
+// Non-/api/ paths and unknown API names fall through to next.
+func withAPIInject(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			name := strings.TrimPrefix(r.URL.Path, "/api/")
+			if h, err := api.Get(name); err == nil {
+				h(w, r)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func parseHostPort(rawURL string) (string, string, error) {
