@@ -26,20 +26,23 @@ type Storage struct {
 func New(path string) (*Storage, error) {
 	slog.Info("opening database", "path", path)
 
-	db, err := sql.Open("sqlite", path)
+	// Apply pragmas through the DSN so every connection in the pool gets them.
+	// busy_timeout and foreign_keys are per-connection, so a single post-open
+	// Exec would only configure one connection out of the pool.
+	//   - journal_mode=WAL: readers proceed concurrently with the single writer.
+	//   - busy_timeout: writers retry instead of failing immediately with SQLITE_BUSY.
+	//   - foreign_keys: enforce ON DELETE CASCADE (e.g. deleting a user removes its
+	//     sessions). SQLite leaves this off by default, which orphaned sessions and
+	//     broke IP-session auth when an orphan shadowed a valid one.
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	dsn := path + sep + "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
+
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, xerrors.Newf("open database: %w", err)
-	}
-
-	// WAL mode lets readers proceed concurrently with the single writer.
-	// busy_timeout makes writers retry instead of immediately failing with SQLITE_BUSY.
-	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
-		db.Close()
-		return nil, xerrors.Newf("set wal mode: %w", err)
-	}
-	if _, err := db.Exec(`PRAGMA busy_timeout=5000`); err != nil {
-		db.Close()
-		return nil, xerrors.Newf("set busy timeout: %w", err)
 	}
 
 	db.SetMaxOpenConns(4)

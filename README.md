@@ -43,6 +43,8 @@ target = "localhost:22"
 type   = "tcp"
 ```
 
+See [docs/deployment.md](docs/deployment.md) for running reMazarin as a hardened systemd service with a dedicated user.
+
 On first run the database is seeded with:
 - **Username:** `admin`  **Password:** `admin123`  ← change this immediately
 

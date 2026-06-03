@@ -27,6 +27,7 @@ type logEntry struct {
 type cachedRoute struct {
 	storage.Route
 	groupSet     map[string]struct{} // pre-parsed from AllowedGroups ("1","3",…)
+	groupIDs     []int               // same groups as ints, for IP-session group filtering
 	allowedAddrs []net.IP            // pre-parsed plain IPs from AllowedIPs
 	allowedNets  []*net.IPNet        // pre-parsed CIDR ranges from AllowedIPs
 }
@@ -100,6 +101,9 @@ func parseCachedRoute(r storage.Route) cachedRoute {
 		for _, p := range strings.Split(r.AllowedGroups, ",") {
 			if p = strings.TrimSpace(p); p != "" {
 				cr.groupSet[p] = struct{}{}
+				if id, err := strconv.Atoi(p); err == nil {
+					cr.groupIDs = append(cr.groupIDs, id)
+				}
 			}
 		}
 	}
@@ -132,15 +136,36 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 		route, found := m[rk]
 		clientIP := extractClientIP(r)
 
+		// Verbose auth tracing. match_ip is the IP actually used for matching;
+		// remote_addr and the forwarding headers reveal whether a fronting
+		// proxy/tunnel is hiding the real client IP in X-Forwarded-For.
+		base := []any{
+			"route", rk,
+			"method", r.Method,
+			"path", r.URL.Path,
+			"match_ip", clientIP,
+			"remote_addr", r.RemoteAddr,
+			"x_forwarded_for", r.Header.Get("X-Forwarded-For"),
+			"x_real_ip", r.Header.Get("X-Real-IP"),
+			"has_cookie", hasSessionCookie(r),
+		}
+
 		if !found {
 			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
-			slog.Debug("request not found in routes cache", "route", rk, "ip", clientIP)
+			slog.Debug("auth deny: route not in cache", base...)
 			logAccess(clientIP, "Unauthorized User", rk)
 			return
 		}
 
+		base = append(base,
+			"ip_auth", route.IPAuth,
+			"allowed_groups", route.AllowedGroups,
+			"allowed_ips", route.AllowedIPs,
+		)
+
 		// Public route: no restrictions configured.
 		if !route.IPAuth && route.AllowedGroups == "" && route.AllowedIPs == "" {
+			slog.Debug("auth allow: public route", base...)
 			logAccess(clientIP, "", rk)
 			RecordRequest(rk)
 			next.ServeHTTP(w, r)
@@ -149,38 +174,42 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 
 		gs := globalSettings.Load().(storage.Settings)
 
-		// IP session auth: connecting IP must have an active session.
+		// IP session auth: the connecting IP must have an active session whose user
+		// is in the allowed groups (the lookup enforces both, skipping orphaned and
+		// non-matching-user sessions on the same IP). A returned session is authorized.
 		if route.IPAuth {
-			if sg, err := authStore.ValidateSessionByIPAndGroups(r.Context(), clientIP); err == nil {
-				authorized := len(route.groupSet) == 0
-				if !authorized {
-					authorized = groupsAllow(route.groupSet, sg.GroupIDs)
+			sg, err := authStore.ValidateSessionByIPInGroups(r.Context(), clientIP, route.groupIDs)
+			if err != nil {
+				slog.Debug("auth: no authorized ip session for match_ip, falling through",
+					append(base, "error", err.Error(), "recent_sessions", authStore.DebugDumpSessions(r.Context(), 10))...)
+			} else {
+				if gs.RenewOnAccess {
+					authStore.ExtendSessionByID(r.Context(), sg.ID, gs.SessionDur())
 				}
-				if authorized {
-					if gs.RenewOnAccess {
-						authStore.ExtendSessionByID(r.Context(), sg.ID, gs.SessionDur())
-					}
-					logAccess(clientIP, sg.Username, rk)
-					RecordRequest(rk)
-					next.ServeHTTP(w, r)
-					return
-				}
-				// Session found but user not in required group — fall through.
+				slog.Debug("auth allow: ip session", append(base, "user", sg.Username, "session_groups", sg.GroupIDs)...)
+				logAccess(clientIP, sg.Username, rk)
+				RecordRequest(rk)
+				next.ServeHTTP(w, r)
+				return
 			}
-			// No active session for this IP — fall through.
 		}
 
 		// Static IP allowlist: matching IP grants access without a session.
-		if route.AllowedIPs != "" && ipAllows(route, clientIP) {
-			logAccess(clientIP, "", rk)
-			RecordRequest(rk)
-			next.ServeHTTP(w, r)
-			return
+		if route.AllowedIPs != "" {
+			if ipAllows(route, clientIP) {
+				slog.Debug("auth allow: ip allowlist", base...)
+				logAccess(clientIP, "", rk)
+				RecordRequest(rk)
+				next.ServeHTTP(w, r)
+				return
+			}
+			slog.Debug("auth: match_ip not in allowlist, falling through", base...)
 		}
 
 		// Cookie-based group auth.
 		if len(route.groupSet) == 0 {
 			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
+			slog.Debug("auth deny: no allowed groups and ip checks failed", base...)
 			logAccess(clientIP, "Unauthorized User", rk)
 			RecordRequest(rk)
 			return
@@ -189,6 +218,7 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 		c, err := r.Cookie("session")
 		if err != nil {
 			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
+			slog.Debug("auth deny: no session cookie", base...)
 			logAccess(clientIP, "Unauthorized User", rk)
 			RecordRequest(rk)
 			return
@@ -196,12 +226,14 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 		sg, err := authStore.ValidateSessionAndGroups(r.Context(), c.Value)
 		if err != nil {
 			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
+			slog.Debug("auth deny: invalid/expired session cookie", append(base, "error", err.Error())...)
 			logAccess(clientIP, "Unauthorized User", rk)
 			RecordRequest(rk)
 			return
 		}
 		if !groupsAllow(route.groupSet, sg.GroupIDs) {
 			http.Error(w, "Forbidden", http.StatusForbidden)
+			slog.Debug("auth deny: cookie user not in allowed group", append(base, "user", sg.Username, "session_groups", sg.GroupIDs)...)
 			logAccess(clientIP, "Unauthorized User", rk)
 			RecordRequest(rk)
 			return
@@ -209,6 +241,7 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 		if gs.RenewOnAccess {
 			authStore.ExtendSession(r.Context(), c.Value, gs.SessionDur())
 		}
+		slog.Debug("auth allow: cookie session", append(base, "user", sg.Username)...)
 		logAccess(clientIP, sg.Username, rk)
 		RecordRequest(rk)
 		next.ServeHTTP(w, r)
@@ -231,6 +264,13 @@ func groupsAllow(groupSet map[string]struct{}, groupIDs []int) bool {
 		}
 	}
 	return false
+}
+
+// hasSessionCookie reports whether the request carries a session cookie.
+// Used only for auth debug logging.
+func hasSessionCookie(r *http.Request) bool {
+	_, err := r.Cookie("session")
+	return err == nil
 }
 
 // extractClientIP returns the IP address part of r.RemoteAddr.

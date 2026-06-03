@@ -94,16 +94,16 @@ func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUr
 	if found && (route.IPAuth || route.AllowedIPs != "") {
 		authorized := false
 
-		// IP session auth: connecting IP must have an active session.
+		// IP session auth: the connecting IP must have an active session whose user
+		// is in the allowed groups (enforced by the lookup). A returned session is
+		// authorized; orphaned/non-matching sessions on the same IP are skipped.
 		if route.IPAuth && authStore != nil {
-			if sg, err := authStore.ValidateSessionByIPAndGroups(context.Background(), clientIP); err == nil {
-				authorized = len(route.groupSet) == 0 || groupsAllow(route.groupSet, sg.GroupIDs)
-				if authorized {
-					accessUser = sg.Username
-					gs := globalSettings.Load().(storage.Settings)
-					if gs.RenewOnAccess {
-						authStore.ExtendSessionByID(context.Background(), sg.ID, gs.SessionDur())
-					}
+			if sg, err := authStore.ValidateSessionByIPInGroups(context.Background(), clientIP, route.groupIDs); err == nil {
+				authorized = true
+				accessUser = sg.Username
+				gs := globalSettings.Load().(storage.Settings)
+				if gs.RenewOnAccess {
+					authStore.ExtendSessionByID(context.Background(), sg.ID, gs.SessionDur())
 				}
 			}
 		}
