@@ -360,6 +360,24 @@ function buildRouteEditPanel(route, groups) {
         </div>
     `;
 
+    // TCP routes have no cookie/HTTP login, so group membership can only be enforced
+    // via IP session auth. Selecting a group therefore forces ip_auth on — keep the
+    // checkbox checked and locked so the UI matches what the backend enforces.
+    if (isTcp) {
+        const ipAuthCheck = panel.querySelector('.ipAuthCheck');
+        const syncIpAuth = () => {
+            const anyGroup = panel.querySelector('.groupCheckList input:checked') !== null;
+            if (anyGroup) {
+                ipAuthCheck.checked = true;
+                ipAuthCheck.disabled = true;
+            } else {
+                ipAuthCheck.disabled = false;
+            }
+        };
+        panel.querySelectorAll('.groupCheckList input').forEach(el => el.addEventListener('change', syncIpAuth));
+        syncIpAuth();
+    }
+
     panel.querySelector('.saveBtn').addEventListener('click', async () => {
         const checked = [...panel.querySelectorAll('.groupCheckList input:checked')].map(el => el.value);
         const body = {

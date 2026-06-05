@@ -601,6 +601,14 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		if body.CookiePolicy == "" {
 			body.CookiePolicy = "persistent"
 		}
+		// TCP routes have no cookie/HTTP login, so IP session auth is the only way to
+		// enforce group membership. Selecting allowed groups implies ip_auth — persist
+		// it so the stored state and admin UI reflect what is actually enforced.
+		if body.AllowedGroups != "" {
+			if rt, err := store.GetRouteByID(r.Context(), id); err == nil && rt.Type == "tcp" {
+				body.IPAuth = true
+			}
+		}
 		if err := store.UpdateRouteAccess(r.Context(), id, body.AllowedGroups, body.AllowedIPs, body.IPAuth, body.CookiePolicy, body.RenewOnAccess, body.SessionDuration); err != nil {
 			fail(w, http.StatusNotFound, "route not found")
 			return

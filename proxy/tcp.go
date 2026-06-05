@@ -91,13 +91,18 @@ func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUr
 
 	var accessUser string
 
-	if found && (route.IPAuth || route.AllowedIPs != "") {
+	if found && (route.IPAuth || route.AllowedGroups != "" || route.AllowedIPs != "") {
 		authorized := false
 
 		// IP session auth: the connecting IP must have an active session whose user
 		// is in the allowed groups (enforced by the lookup). A returned session is
 		// authorized; orphaned/non-matching sessions on the same IP are skipped.
-		if route.IPAuth && authStore != nil {
+		//
+		// For TCP there is no cookie/HTTP login, so IP session auth is the only way to
+		// enforce group membership. Selecting allowed groups therefore implies IP
+		// session auth, regardless of the ip_auth flag — otherwise a group-restricted
+		// route with ip_auth off would fail open and let everyone through.
+		if (route.IPAuth || route.AllowedGroups != "") && authStore != nil {
 			if sg, err := authStore.ValidateSessionByIPInGroups(context.Background(), clientIP, route.groupIDs); err == nil {
 				authorized = true
 				accessUser = sg.Username
