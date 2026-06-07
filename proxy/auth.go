@@ -159,6 +159,7 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 
 		base = append(base,
 			"ip_auth", route.IPAuth,
+			"persistent_login", route.PersistentLogin,
 			"allowed_groups", route.AllowedGroups,
 			"allowed_ips", route.AllowedIPs,
 		)
@@ -184,7 +185,9 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 					append(base, "error", err.Error(), "recent_sessions", authStore.DebugDumpSessions(r.Context(), 10))...)
 			} else {
 				if gs.RenewOnAccess {
-					authStore.ExtendSessionByID(r.Context(), sg.ID, gs.SessionDur())
+					// Renew every session this user holds on the IP so HTTP and TCP
+					// activity keep each other's sessions alive (see ExtendUserSessionsByIP).
+					authStore.ExtendUserSessionsByIP(r.Context(), sg.UserID, clientIP, gs.SessionDur())
 				}
 				slog.Debug("auth allow: ip session", append(base, "user", sg.Username, "session_groups", sg.GroupIDs)...)
 				logAccess(clientIP, sg.Username, rk)
@@ -204,6 +207,18 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 				return
 			}
 			slog.Debug("auth: match_ip not in allowlist, falling through", base...)
+		}
+
+		// Cookie (persistent-login) auth — an independent alternative to IP session
+		// auth. A route that does not enable persistent login does not accept cookie
+		// auth at all: even a valid session cookie is ignored and the request denied
+		// (the IP checks above were the only way in). The cookie is never touched.
+		if !route.PersistentLogin {
+			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
+			slog.Debug("auth deny: persistent-login (cookie) auth disabled for route", base...)
+			logAccess(clientIP, "Unauthorized User", rk)
+			RecordRequest(rk)
+			return
 		}
 
 		// Cookie-based group auth.
@@ -241,6 +256,10 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 		if gs.RenewOnAccess {
 			authStore.ExtendSession(r.Context(), c.Value, gs.SessionDur())
 		}
+		// The cookie itself is not touched here: its lifetime is set once at login
+		// (persistent by default) and the DB session — kept alive by access,
+		// including TCP — is the authority on validity. IP auth and cookie auth are
+		// independent; neither path rewrites the other's cookie.
 		slog.Debug("auth allow: cookie session", append(base, "user", sg.Username)...)
 		logAccess(clientIP, sg.Username, rk)
 		RecordRequest(rk)

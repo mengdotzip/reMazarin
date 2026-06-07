@@ -30,9 +30,11 @@ That's it. The runner will apply it on the next startup and record it in `schema
 | Version | File | What it adds |
 |---------|------|-------------|
 | 001 | `001_initial_schema.sql` | Core tables: `proxy_routes`, `users`, `groups`, `user_groups`, `invites`, `sessions` |
-| 002 | `002_access_control.sql` | `allowed_groups`, `cookie_policy`, `renew_on_access` on `proxy_routes` |
+| 002 | `002_access_control.sql` | `allowed_groups`, `cookie_policy` (dropped in 012), `renew_on_access` on `proxy_routes` |
 | 003 | `003_allowed_ips.sql` | `allowed_ips` on `proxy_routes` |
 | 004 | `004_ip_session_auth.sql` | `ip_auth` on `proxy_routes`; `client_ip` on `sessions` |
+| 012 | `012_cookie_settings.sql` | Replaces the never-enforced three-way `cookie_policy` on `proxy_routes` with a boolean `persistent_login` (default true): per-route gate for cookie auth |
+| 013 | `013_drop_route_session_fields.sql` | Drops the never-enforced per-route `renew_on_access` and `session_duration` from `proxy_routes` (both are global, in `settings`) |
 
 ## Existing databases
 

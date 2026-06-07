@@ -108,7 +108,9 @@ func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUr
 				accessUser = sg.Username
 				gs := globalSettings.Load().(storage.Settings)
 				if gs.RenewOnAccess {
-					authStore.ExtendSessionByID(context.Background(), sg.ID, gs.SessionDur())
+					// Renew every session this user holds on the IP, not just the
+					// matched row, so TCP activity keeps the browser session alive.
+					authStore.ExtendUserSessionsByIP(context.Background(), sg.UserID, clientIP, gs.SessionDur())
 				}
 			}
 		}

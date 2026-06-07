@@ -85,6 +85,52 @@ func TestIPSessionAuthSkipsOrphanAndHonorsGroups(t *testing.T) {
 	}
 }
 
+// IP/TCP renewal must extend every session a user holds on the IP, not just one,
+// so TCP activity keeps a co-located browser session alive instead of letting it
+// lapse. Sessions on other IPs or for other users must be left untouched.
+func TestExtendUserSessionsByIPRenewsAllUserSessions(t *testing.T) {
+	ctx := context.Background()
+	s, err := New(t.TempDir() + "/renew.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	meng, _ := s.CreateUser(ctx, "meng", "pw")
+	other, _ := s.CreateUser(ctx, "other", "pw")
+
+	const ip = "10.0.30.25"
+	near := time.Now().Add(1 * time.Hour)
+	// Two of meng's sessions on the same IP (e.g. browser + an earlier login),
+	// one of meng's on a different IP, and one belonging to another user.
+	s.db.ExecContext(ctx, `INSERT INTO sessions (token_hash,user_id,client_ip,expires_at) VALUES (?,?,?,?)`,
+		"a", meng.ID, ip, near)
+	s.db.ExecContext(ctx, `INSERT INTO sessions (token_hash,user_id,client_ip,expires_at) VALUES (?,?,?,?)`,
+		"b", meng.ID, ip, near)
+	s.db.ExecContext(ctx, `INSERT INTO sessions (token_hash,user_id,client_ip,expires_at) VALUES (?,?,?,?)`,
+		"c", meng.ID, "10.0.30.99", near)
+	s.db.ExecContext(ctx, `INSERT INTO sessions (token_hash,user_id,client_ip,expires_at) VALUES (?,?,?,?)`,
+		"d", other.ID, ip, near)
+
+	s.ExtendUserSessionsByIP(ctx, meng.ID, ip, 15*time.Hour)
+
+	exp := func(tok string) time.Time {
+		var e time.Time
+		s.db.QueryRow(`SELECT expires_at FROM sessions WHERE token_hash = ?`, tok).Scan(&e)
+		return e
+	}
+	cutoff := time.Now().Add(10 * time.Hour)
+	if !exp("a").After(cutoff) || !exp("b").After(cutoff) {
+		t.Fatalf("both of meng's sessions on the IP should be extended: a=%s b=%s", exp("a"), exp("b"))
+	}
+	if exp("c").After(cutoff) {
+		t.Fatalf("meng's session on a different IP must not be extended: %s", exp("c"))
+	}
+	if exp("d").After(cutoff) {
+		t.Fatalf("another user's session on the IP must not be extended: %s", exp("d"))
+	}
+}
+
 // With foreign_keys enforced, deleting a user must cascade to their sessions so
 // no orphans are created in the first place.
 func TestDeletingUserCascadesSessions(t *testing.T) {

@@ -47,6 +47,14 @@ func HandleConfig(w http.ResponseWriter, r *http.Request) {
 const (
 	sessionCookie    = "session"
 	defaultSessionDur = 7 * 24 * time.Hour
+	// cookieMaxAge is how long the browser retains the session cookie. It is
+	// deliberately decoupled from (and much longer than) the session duration:
+	// the DB session — which TCP/IP activity keeps alive — is the authority on
+	// expiry, re-checked on every request (expires_at > now). Tying the cookie to
+	// session_duration made an idle browser silently drop the cookie after the
+	// session length even while TCP kept the underlying session alive, forcing a
+	// needless re-login. 400 days is the practical browser cap for persistent cookies.
+	cookieMaxAge = 400 * 24 * time.Hour
 )
 
 // ---- helpers ----------------------------------------------------------------
@@ -80,7 +88,12 @@ func rootDomain(hostHeader string) string {
 	return strings.Join(parts[len(parts)-2:], ".")
 }
 
-func setSession(w http.ResponseWriter, r *http.Request, tok string, dur time.Duration) {
+// setSession issues the login cookie. It is always a persistent (long-lived)
+// cookie so it survives browser restarts/idle; the DB session — kept alive by
+// access, including TCP — is the authority on validity. Whether a given route
+// honours this cookie is a separate, per-route decision (persistent_login),
+// enforced in the proxy; that gate never rewrites the cookie itself.
+func setSession(w http.ResponseWriter, r *http.Request, tok string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    tok,
@@ -89,7 +102,7 @@ func setSession(w http.ResponseWriter, r *http.Request, tok string, dur time.Dur
 		HttpOnly: true,
 		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(dur.Seconds()),
+		MaxAge:   int(cookieMaxAge.Seconds()),
 	})
 }
 
@@ -163,7 +176,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, "session error")
 		return
 	}
-	setSession(w, r, tok, dur)
+	setSession(w, r, tok)
 	groups, _ := store.GetUserGroups(r.Context(), user.ID)
 	ok(w, map[string]any{"user": user, "groups": groups})
 }
@@ -257,6 +270,10 @@ func HandleUserRoutes(w http.ResponseWriter, r *http.Request) {
 		SessionDuration int    `json:"session_duration"`
 		RenewOnAccess   bool   `json:"renew_on_access"`
 	}
+	// Session duration and renewal are global; report the same values the proxy
+	// actually enforces so the auth page display matches reality.
+	settings, _ := store.GetSettings(r.Context())
+	durHours := int(settings.SessionDur().Hours())
 	// Exclude the proxy/auth page itself by comparing hostnames.
 	selfHost := strings.SplitN(r.Host, ":", 2)[0]
 	var accessible []routeInfo
@@ -270,7 +287,7 @@ func HandleUserRoutes(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if storage.RouteAllows(rt.AllowedGroups, groupIDs) {
-			accessible = append(accessible, routeInfo{rt.Url, rt.Tls, rt.SessionDuration, rt.RenewOnAccess})
+			accessible = append(accessible, routeInfo{rt.Url, rt.Tls, durHours, settings.RenewOnAccess})
 		}
 	}
 	if accessible == nil {
@@ -318,9 +335,9 @@ func HandleExtendSession(w http.ResponseWriter, r *http.Request) {
 	settings, _ := store.GetSettings(r.Context())
 	dur := settings.SessionDur()
 	store.ExtendSessionByID(r.Context(), sess.ID, dur)
-	// Refresh the browser cookie so it doesn't expire before the DB session.
+	// Roll the cookie's lifetime forward alongside the DB session.
 	if c, err := r.Cookie(sessionCookie); err == nil {
-		setSession(w, r, c.Value, dur)
+		setSession(w, r, c.Value)
 	}
 	ok(w, map[string]any{"expires_at": time.Now().Add(dur)})
 }
@@ -589,17 +606,12 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 			AllowedGroups   string `json:"allowed_groups"`
 			AllowedIPs      string `json:"allowed_ips"`
 			IPAuth          bool   `json:"ip_auth"`
-			CookiePolicy    string `json:"cookie_policy"`
-			RenewOnAccess   bool   `json:"renew_on_access"`
-			SessionDuration int    `json:"session_duration"`
+			PersistentLogin bool   `json:"persistent_login"`
 			Target          string `json:"target"`
 		}
 		if !decode(r, &body) {
 			fail(w, http.StatusBadRequest, "invalid request")
 			return
-		}
-		if body.CookiePolicy == "" {
-			body.CookiePolicy = "persistent"
 		}
 		// TCP routes have no cookie/HTTP login, so IP session auth is the only way to
 		// enforce group membership. Selecting allowed groups implies ip_auth — persist
@@ -609,7 +621,7 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 				body.IPAuth = true
 			}
 		}
-		if err := store.UpdateRouteAccess(r.Context(), id, body.AllowedGroups, body.AllowedIPs, body.IPAuth, body.CookiePolicy, body.RenewOnAccess, body.SessionDuration); err != nil {
+		if err := store.UpdateRouteAccess(r.Context(), id, body.AllowedGroups, body.AllowedIPs, body.IPAuth, body.PersistentLogin); err != nil {
 			fail(w, http.StatusNotFound, "route not found")
 			return
 		}

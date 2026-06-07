@@ -235,6 +235,24 @@ func (s *Storage) ExtendSessionByID(ctx context.Context, id int, dur time.Durati
 	s.db.ExecContext(ctx, `UPDATE sessions SET expires_at = ? WHERE id = ?`, exp, id)
 }
 
+// ExtendUserSessionsByIP extends every active session belonging to the given
+// user on the given IP. IP session auth (used by TCP and cookie-less HTTP) only
+// ever matches one session row per IP — the latest-expiring one — but a user can
+// accumulate several rows on the same IP (each browser login mints a new row).
+// Renewing just the matched row lets the others lapse, so a browser cookie
+// session can expire even while TCP traffic keeps a different row alive. Renewing
+// all of the user's rows on the IP keeps them in lockstep, so TCP activity counts
+// toward the user's browser session and vice versa.
+func (s *Storage) ExtendUserSessionsByIP(ctx context.Context, userID int, ip string, dur time.Duration) {
+	ip = normalizeIP(ip)
+	exp := time.Now().Add(dur)
+	// CAST guards against legacy rows whose client_ip was persisted as BLOB.
+	s.db.ExecContext(ctx,
+		`UPDATE sessions SET expires_at = ?
+		 WHERE user_id = ? AND CAST(client_ip AS TEXT) = ? AND expires_at > ?`,
+		exp, userID, ip, time.Now())
+}
+
 func (s *Storage) CleanupExpiredSessions(ctx context.Context) {
 	result, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < ?`, time.Now())
 	if err != nil {

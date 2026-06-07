@@ -338,17 +338,18 @@ function buildRouteEditPanel(route, groups) {
         </div>
     `;
 
-    // Cookie policy row (HTTP routes only).
-    const cookieRows = !isTcp ? `
+    // Persistent login is the cookie-based auth option for HTTP routes — an
+    // independent alternative to IP session auth, checked by default. When off,
+    // the route ignores the login cookie (even a valid one) and is reachable only
+    // via IP session auth. TCP routes have no cookie/HTTP login, so it does not apply.
+    const cookieRows = isTcp
+        ? `<div class="routeEditRow" style="color:#888;font-size:11px;font-style:italic;padding-left:118px">Cookie auth not available for TCP routes.</div>`
+        : `
         <div class="routeEditRow">
-            <label>Cookie policy</label>
-            <select>
-                <option value="persistent" ${route.cookie_policy === 'persistent' ? 'selected' : ''}>Persistent</option>
-                <option value="session"    ${route.cookie_policy === 'session'    ? 'selected' : ''}>Session only</option>
-                <option value="none"       ${route.cookie_policy === 'none'       ? 'selected' : ''}>None</option>
-            </select>
-        </div>
-    ` : `<div class="routeEditRow" style="color:#888;font-size:11px;font-style:italic;padding-left:118px">Cookie auth not available for TCP routes.</div>`;
+            <label>Persistent login</label>
+            <input type="checkbox" class="persistentLoginCheck" ${route.persistent_login !== false ? 'checked' : ''}>
+            <span style="font-size:11px;color:#888">accept the browser login cookie (works across IPs, e.g. VPN)</span>
+        </div>`;
 
     panel.innerHTML = `
         ${targetRow}
@@ -381,13 +382,12 @@ function buildRouteEditPanel(route, groups) {
     panel.querySelector('.saveBtn').addEventListener('click', async () => {
         const checked = [...panel.querySelectorAll('.groupCheckList input:checked')].map(el => el.value);
         const body = {
-            ip_auth:        panel.querySelector('.ipAuthCheck').checked,
-            allowed_groups: checked.join(','),
-            allowed_ips:    (panel.querySelector('.ipsInput')?.value || '').trim(),
+            ip_auth:          panel.querySelector('.ipAuthCheck').checked,
+            allowed_groups:   checked.join(','),
+            allowed_ips:      (panel.querySelector('.ipsInput')?.value || '').trim(),
+            // Default true for routes (e.g. TCP) without the checkbox.
+            persistent_login: panel.querySelector('.persistentLoginCheck')?.checked ?? true,
         };
-        if (!isTcp) {
-            body.cookie_policy = panel.querySelector('select').value;
-        }
         const ti = panel.querySelector('.targetInput');
         if (ti) body.target = ti.value;
         await api('PUT', 'admin/routes?id=' + route.id, body);
