@@ -101,7 +101,7 @@ key    = "./certs/key.pem"
 |----------|--------|-----------|----------------------------------------------------------------------------|
 | `url`    | string | —         | `host:port` this route matches on. Required. Must be unique.               |
 | `target` | string | —         | Backend address or identifier. Required. See route types below.            |
-| `type`   | string | `"proxy"` | Route type. One of `proxy`, `static`, `api`, or `tcp`.                    |
+| `type`   | string | `"proxy"` | Route type. One of `proxy`, `static`, `api`, `tcp`, `udp`, or `tcp+udp`.   |
 | `tls`    | bool   | `false`   | Terminate TLS on the listener for this route's port.                       |
 | `cert`   | string | `""`      | Path to the TLS certificate file. Required when `tls = true`.              |
 | `key`    | string | `""`      | Path to the TLS private key file. Required when `tls = true`.              |
@@ -114,6 +114,8 @@ key    = "./certs/key.pem"
 | `static` | filesystem path             | Serve a directory of static files from the given path (e.g. `./www/myapp`). |
 | `api`    | registered function name    | Route to a built-in Go API handler registered in `api/api.go`.               |
 | `tcp`    | `host:port`                 | Raw TCP passthrough — no HTTP parsing, no TLS termination.                   |
+| `udp`    | `host:port`                 | Raw UDP relay (NAT-style, per-client sessions) — no HTTP parsing, no TLS.    |
+| `tcp+udp`| `host:port`                 | Binds both a TCP and a UDP listener on the same port (e.g. coturn on 3478).  |
 
 ### Notes on TLS
 

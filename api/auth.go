@@ -282,8 +282,8 @@ func HandleUserRoutes(w http.ResponseWriter, r *http.Request) {
 	selfHost := strings.SplitN(r.Host, ":", 2)[0]
 	var accessible []routeInfo
 	for _, rt := range routes {
-		// Skip tcp routes and internal API handlers — not browser-navigable.
-		if rt.Type == "tcp" || rt.Type == "api" {
+		// Skip raw (tcp/udp) routes and internal API handlers — not browser-navigable.
+		if isRawType(rt.Type) || rt.Type == "api" {
 			continue
 		}
 		// Skip this proxy/auth page.
@@ -570,8 +570,8 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		if body.Type == "" {
 			body.Type = "proxy"
 		}
-		// TCP routes do not terminate TLS — ignore the flag if set.
-		if body.Type == "tcp" {
+		// Raw (tcp/udp) routes do not terminate TLS — ignore the flag if set.
+		if isRawType(body.Type) {
 			body.Tls = false
 		}
 		cert, key := "", ""
@@ -632,7 +632,7 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if body.AllowedGroups != "" {
-				if rt, err := store.GetRouteByGroup(r.Context(), group); err == nil && rt.Type == "tcp" {
+				if rt, err := store.GetRouteByGroup(r.Context(), group); err == nil && isRawType(rt.Type) {
 					body.IPAuth = true
 				}
 			}
@@ -655,11 +655,11 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 			fail(w, http.StatusBadRequest, "invalid request")
 			return
 		}
-		// TCP routes have no cookie/HTTP login, so IP session auth is the only way to
-		// enforce group membership. Selecting allowed groups implies ip_auth — persist
-		// it so the stored state and admin UI reflect what is actually enforced.
+		// Raw (tcp/udp) routes have no cookie/HTTP login, so IP session auth is the
+		// only way to enforce group membership. Selecting allowed groups implies
+		// ip_auth — persist it so stored state and admin UI reflect what is enforced.
 		if body.AllowedGroups != "" {
-			if rt, err := store.GetRouteByID(r.Context(), id); err == nil && rt.Type == "tcp" {
+			if rt, err := store.GetRouteByID(r.Context(), id); err == nil && isRawType(rt.Type) {
 				body.IPAuth = true
 			}
 		}
@@ -721,6 +721,11 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
+
+// isRawType reports whether a route type is a raw (connectionless/non-HTTP)
+// protocol: tcp, udp, or the combined tcp+udp. These have no cookie/HTTP login,
+// so they are gated by client IP only.
+func isRawType(t string) bool { return t == "tcp" || t == "udp" || t == "tcp+udp" }
 
 // splitHostPortNum splits a "host:port" string and parses the numeric port.
 func splitHostPortNum(hostPort string) (host string, port int, err error) {

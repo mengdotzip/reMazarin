@@ -16,6 +16,32 @@ Unauthenticated requests to the admin host receive a plain HTTP 401 — the HTML
 
 Access control changes made through the admin panel take effect **immediately** — no restart required. The proxy keeps an in-memory cache of route access rules. Saving a route in the admin panel triggers an instant cache refresh. The cache also refreshes automatically every 5 minutes, which covers any manual database edits.
 
+## Raw routes: TCP, UDP, and tcp+udp
+
+Besides HTTP `proxy` routes, reMazarin can forward raw L4 traffic:
+
+- **`tcp`** — accepts connections and pipes bytes to the target.
+- **`udp`** — a NAT-style relay. UDP is connectionless, so for each client source
+  address reMazarin dials a dedicated socket to the target and pumps replies back;
+  flows idle for 120 s are reaped. Needed for things like coturn (TURN/STUN).
+- **`tcp+udp`** — a single route that binds **both** a TCP and a UDP listener on the
+  same port. This is one row in the admin panel; access control and the backend
+  apply to both protocols. coturn's signalling port (`3478`) is the canonical case.
+
+A raw TCP listener and an HTTP route cannot share a port (both bind TCP), but a UDP
+listener is independent and coexists with either — which is what makes `tcp+udp`
+on one port possible.
+
+**Auth for raw routes is IP-based only.** There is no cookie/HTTP login over raw
+TCP/UDP, so access is gated by **IP session auth** and/or the **static IP
+allowlist** (see below). As with TCP, selecting allowed groups on a UDP or tcp+udp
+route implies IP session auth — otherwise a group-restricted route would fail open.
+
+**UDP and source IP:** a userspace UDP relay means the target sees *reMazarin's*
+address as the source, not the real client's (each client still gets a distinct
+relay source port, so the target's 5-tuple demux still works). Keep this in mind
+when the backend does its own IP-based logic.
+
 ## Port-range routes
 
 When creating a route in the admin panel you can tick **Port range** and give an

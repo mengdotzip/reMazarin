@@ -5,7 +5,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"reMazarin/storage"
 	"sync"
 
 	"github.com/mdobak/go-xerrors"
@@ -86,45 +85,11 @@ func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUr
 	defer clientConn.Close()
 	clientIP, _, _ := net.SplitHostPort(clientConn.RemoteAddr().String())
 
-	m := authCache.Load().(map[string]cachedRoute)
-	route, found := m[routeUrl]
-
-	var accessUser string
-
-	if found && (route.IPAuth || route.AllowedGroups != "" || route.AllowedIPs != "") {
-		authorized := false
-
-		// IP session auth: the connecting IP must have an active session whose user
-		// is in the allowed groups (enforced by the lookup). A returned session is
-		// authorized; orphaned/non-matching sessions on the same IP are skipped.
-		//
-		// For TCP there is no cookie/HTTP login, so IP session auth is the only way to
-		// enforce group membership. Selecting allowed groups therefore implies IP
-		// session auth, regardless of the ip_auth flag — otherwise a group-restricted
-		// route with ip_auth off would fail open and let everyone through.
-		if (route.IPAuth || route.AllowedGroups != "") && authStore != nil {
-			if sg, err := authStore.ValidateSessionByIPInGroups(context.Background(), clientIP, route.groupIDs); err == nil {
-				authorized = true
-				accessUser = sg.Username
-				gs := globalSettings.Load().(storage.Settings)
-				if gs.RenewOnAccess {
-					// Renew every session this user holds on the IP, not just the
-					// matched row, so TCP activity keeps the browser session alive.
-					authStore.ExtendUserSessionsByIP(context.Background(), sg.UserID, clientIP, gs.SessionDur())
-				}
-			}
-		}
-
-		// Static IP allowlist fallback.
-		if !authorized && route.AllowedIPs != "" {
-			authorized = ipAllows(route, clientIP)
-		}
-
-		if !authorized {
-			logAccess(clientIP, "Unauthorized User", routeUrl)
-			slog.Warn("tcp: connection rejected, not authorized", "client", clientIP, "route", routeUrl)
-			return
-		}
+	authorized, accessUser := authorizeIP(routeUrl, clientIP)
+	if !authorized {
+		logAccess(clientIP, "Unauthorized User", routeUrl)
+		slog.Warn("tcp: connection rejected, not authorized", "client", clientIP, "route", routeUrl)
+		return
 	}
 
 	RecordRequest(routeUrl)

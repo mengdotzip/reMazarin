@@ -39,6 +39,8 @@ type Proxy struct {
 	servers     map[string]*listenServer
 	tcpCancels  map[string]context.CancelFunc
 	tcpMu       sync.Mutex
+	udpCancels  map[string]context.CancelFunc
+	udpMu       sync.Mutex
 	serversMu   sync.Mutex
 	liveHTTP    []*http.Server
 	ctx         context.Context
@@ -55,6 +57,7 @@ func (p *Proxy) StartProxy(ctx context.Context, otel bool) error {
 
 	p.servers = make(map[string]*listenServer)
 	p.tcpCancels = make(map[string]context.CancelFunc)
+	p.udpCancels = make(map[string]context.CancelFunc)
 
 	if err := p.parseProxies(); err != nil {
 		return xerrors.Newf("parse proxies: %w", err)
@@ -64,20 +67,26 @@ func (p *Proxy) StartProxy(ctx context.Context, otel bool) error {
 		return xerrors.Newf("init proxies: %w", err)
 	}
 
-	tcpCount := 0
+	rawCount := 0
 	for _, r := range p.Proxies {
-		if r.Type == "tcp" {
-			tcpCount++
+		if isTCP(r.Type) {
+			rawCount++
+		}
+		if isUDP(r.Type) {
+			rawCount++
 		}
 	}
-	p.ErrChan = make(chan error, len(p.servers)+tcpCount+16)
+	p.ErrChan = make(chan error, len(p.servers)+rawCount+16)
 
 	p.startListeners()
 
 	for _, route := range p.Proxies {
-		if route.Type == "tcp" {
-			_, port, _ := parseHostPort(route.Url)
+		_, port, _ := parseHostPort(route.Url)
+		if isTCP(route.Type) {
 			p.startTCPProxy(port, route.Target, route.Url)
+		}
+		if isUDP(route.Type) {
+			p.startUDPProxy(port, route.Target, route.Url)
 		}
 	}
 
@@ -98,27 +107,41 @@ func (p *Proxy) ShutdownHTTP(ctx context.Context) {
 }
 
 // ValidateRoute checks whether a new route is compatible with the live proxy:
-// valid host:port format, known type, and no port conflicts between HTTP and TCP.
+// valid host:port format, known type, and no port conflicts. A raw TCP listener
+// and an HTTP listener cannot share a port (both bind TCP), but a UDP listener is
+// independent and may coexist with either — which is what lets a "tcp+udp" route
+// (e.g. coturn on 3478) bind both protocols on the same port.
 func (p *Proxy) ValidateRoute(url, routeType string) error {
 	_, port, err := parseHostPort(url)
 	if err != nil {
 		return xerrors.Newf("invalid url %q: expected host:port", url)
 	}
 	switch routeType {
-	case "proxy", "tcp", "static", "api", "":
+	case "proxy", "tcp", "udp", "tcp+udp", "static", "api", "":
 	default:
 		return xerrors.Newf("unknown route type %q", routeType)
 	}
+
 	p.tcpMu.Lock()
 	_, hasTCP := p.tcpCancels[port]
 	p.tcpMu.Unlock()
-	if routeType != "tcp" && hasTCP {
+	p.udpMu.Lock()
+	_, hasUDP := p.udpCancels[port]
+	p.udpMu.Unlock()
+	_, hasHTTP := p.servers[port]
+
+	needsTCP := isTCP(routeType)
+	needsUDP := isUDP(routeType)
+	isHTTP := !isRaw(routeType)
+
+	if (needsTCP || isHTTP) && hasTCP {
 		return xerrors.Newf("port %s is already used by a TCP route", port)
 	}
-	if routeType == "tcp" {
-		if _, hasHTTP := p.servers[port]; hasHTTP {
-			return xerrors.Newf("port %s is already used by an HTTP route", port)
-		}
+	if needsTCP && hasHTTP {
+		return xerrors.Newf("port %s is already used by an HTTP route", port)
+	}
+	if needsUDP && hasUDP {
+		return xerrors.Newf("port %s is already used by a UDP route", port)
 	}
 	return nil
 }
@@ -127,6 +150,7 @@ func (p *Proxy) parseProxies() error {
 
 	usedUrls := make(map[string]bool)
 	tcpPorts := make(map[string]bool)
+	udpPorts := make(map[string]bool)
 
 	for _, route := range p.Proxies {
 		host, port, err := parseHostPort(route.Url)
@@ -139,15 +163,25 @@ func (p *Proxy) parseProxies() error {
 		}
 		usedUrls[route.Url] = true
 
-		if route.Type == "tcp" {
-			if tcpPorts[port] {
-				return xerrors.Newf("duplicate TCP port %s", port)
+		// Raw routes (tcp / udp / tcp+udp) get dedicated per-port listeners started
+		// in StartProxy rather than a shared HTTP listenServer.
+		if isRaw(route.Type) {
+			if isTCP(route.Type) {
+				if tcpPorts[port] {
+					return xerrors.Newf("duplicate TCP port %s", port)
+				}
+				if _, httpExists := p.servers[port]; httpExists {
+					return xerrors.Newf("port %s used by both HTTP and TCP routes", port)
+				}
+				tcpPorts[port] = true
 			}
-			if _, httpExists := p.servers[port]; httpExists {
-				return xerrors.Newf("port %s used by both HTTP and TCP routes", port)
+			if isUDP(route.Type) {
+				if udpPorts[port] {
+					return xerrors.Newf("duplicate UDP port %s", port)
+				}
+				udpPorts[port] = true
 			}
-			tcpPorts[port] = true
-			slog.Debug("new tcp route", "port", port, "target", route.Target)
+			slog.Debug("new raw route", "port", port, "type", route.Type, "target", route.Target)
 			continue
 		}
 
@@ -244,18 +278,24 @@ func createHandlerForRoute(route *ProxyRoute, otel bool) (http.Handler, error) {
 }
 
 // RegisterRoute dynamically adds or replaces a route in a running proxy.
-// For TCP routes a new dedicated listener is started on the route's port.
-// For HTTP routes, returns an error if no listener exists for the route's port;
-// in that case the route is still persisted in the DB and will be active after a restart.
+// For raw routes (tcp / udp / tcp+udp) dedicated per-protocol listeners are
+// started on the route's port. For HTTP routes, returns an error if no listener
+// exists for the route's port; in that case the route is still persisted in the
+// DB and will be active after a restart.
 func (p *Proxy) RegisterRoute(route ProxyRoute) error {
 	host, port, err := parseHostPort(route.Url)
 	if err != nil {
 		return xerrors.Newf("parse route url: %w", err)
 	}
 
-	if route.Type == "tcp" {
-		p.startTCPProxy(port, route.Target, route.Url)
-		slog.Info("tcp route registered", "url", route.Url)
+	if isRaw(route.Type) {
+		if isTCP(route.Type) {
+			p.startTCPProxy(port, route.Target, route.Url)
+		}
+		if isUDP(route.Type) {
+			p.startUDPProxy(port, route.Target, route.Url)
+		}
+		slog.Info("raw route registered", "url", route.Url, "type", route.Type)
 		return nil
 	}
 
@@ -329,9 +369,11 @@ func (p *Proxy) UnregisterRoute(url string) {
 		return
 	}
 
-	// Not an HTTP route — stop TCP proxy if one exists on this port.
+	// Not an HTTP route — stop any raw listeners on this port. A tcp+udp route
+	// has both; stopping a non-existent one is a no-op.
 	p.stopTCPProxy(port)
-	slog.Info("tcp route unregistered", "url", url)
+	p.stopUDPProxy(port)
+	slog.Info("raw route unregistered", "url", url)
 }
 
 // wrapRouteHandler applies auth middleware (and API injection for InjectAPI routes)

@@ -36,7 +36,8 @@ tls    = true
 cert   = "./certs/cert.pem"
 key    = "./certs/key.pem"
 
-# TCP passthrough route (raw port forwarding, no TLS termination)
+# Raw passthrough route (no TLS termination). type: tcp, udp, or tcp+udp
+# (tcp+udp binds both protocols on one port — e.g. coturn on 3478).
 [[routes]]
 url    = "myhost.example.com:2222"
 target = "localhost:22"

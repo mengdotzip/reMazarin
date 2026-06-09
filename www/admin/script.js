@@ -300,7 +300,9 @@ function renderRouteItem(members, groups, list) {
         ? activeGroups.map(n => `<span class="tag">${n}</span>`).join('')
         : '<span class="tag">public</span>';
 
-    const typeBadge   = `<span class="badge badge-${rep.type || 'proxy'}">${rep.type || 'proxy'}</span>`;
+    // "tcp+udp" isn't a valid CSS class token — drop the '+' for the class only.
+    const typeName    = rep.type || 'proxy';
+    const typeBadge   = `<span class="badge badge-${typeName.replace('+', '')}">${typeName}</span>`;
     const sourceBadge = `<span class="badge badge-${rep.source}">${rep.source}</span>`;
     const delBtn = rep.source === 'ui'
         ? `<button class="delBtn" title="Delete route">×</button>`
@@ -439,9 +441,11 @@ function buildRouteEditPanel(route, groups, isGroup) {
 }
 
 function onRouteTypeChange() {
-    const isTcp = document.getElementById('newRouteType').value === 'tcp';
-    document.getElementById('newRouteTlsRow').style.display = isTcp ? 'none' : '';
-    if (isTcp) document.getElementById('newRouteTls').checked = false;
+    // Raw routes (tcp/udp/tcp+udp) don't terminate TLS — hide the TLS toggle.
+    const t = document.getElementById('newRouteType').value;
+    const isRaw = t === 'tcp' || t === 'udp' || t === 'tcp+udp';
+    document.getElementById('newRouteTlsRow').style.display = isRaw ? 'none' : '';
+    if (isRaw) document.getElementById('newRouteTls').checked = false;
 }
 
 function onPortRangeChange() {

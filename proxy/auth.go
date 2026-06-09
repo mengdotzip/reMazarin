@@ -123,6 +123,51 @@ func parseCachedRoute(r storage.Route) cachedRoute {
 	return cr
 }
 
+// isTCP / isUDP report which raw listeners a route type needs. "tcp+udp" binds
+// both. isRaw is true for any connectionless/raw type — those have no HTTP/cookie
+// layer and are gated by client IP only.
+func isTCP(t string) bool { return t == "tcp" || t == "tcp+udp" }
+func isUDP(t string) bool { return t == "udp" || t == "tcp+udp" }
+func isRaw(t string) bool { return isTCP(t) || isUDP(t) }
+
+// authorizeIP enforces IP-based access control for a raw (TCP/UDP) flow. It
+// returns whether the client IP is allowed and, when authorised via IP session
+// auth, the matched username for access logging. A route with no auth configured
+// (no ip_auth, no groups, no allowed_ips) — or one not yet in the cache — is
+// public and always allowed.
+//
+// Raw protocols carry no cookie/HTTP login, so IP session auth is the only way to
+// enforce group membership. Selecting allowed groups therefore implies IP session
+// auth regardless of the ip_auth flag — otherwise a group-restricted route with
+// ip_auth off would fail open and pass everyone. The static IP allowlist is a
+// separate fallback that always grants matching IPs.
+func authorizeIP(routeUrl, clientIP string) (authorized bool, accessUser string) {
+	m := authCache.Load().(map[string]cachedRoute)
+	route, found := m[routeUrl]
+	if !found || (!route.IPAuth && route.AllowedGroups == "" && route.AllowedIPs == "") {
+		return true, ""
+	}
+
+	if (route.IPAuth || route.AllowedGroups != "") && authStore != nil {
+		// The returned session is in an allowed group (enforced by the lookup);
+		// orphaned/non-matching sessions on the same IP are skipped.
+		if sg, err := authStore.ValidateSessionByIPInGroups(context.Background(), clientIP, route.groupIDs); err == nil {
+			gs := globalSettings.Load().(storage.Settings)
+			if gs.RenewOnAccess {
+				// Renew every session this user holds on the IP so raw-protocol
+				// activity keeps the browser session alive too.
+				authStore.ExtendUserSessionsByIP(context.Background(), sg.UserID, clientIP, gs.SessionDur())
+			}
+			return true, sg.Username
+		}
+	}
+
+	if route.AllowedIPs != "" && ipAllows(route, clientIP) {
+		return true, ""
+	}
+	return false, ""
+}
+
 // withAuthForKey returns a handler pre-bound to rk that enforces access control.
 // The closure is created once at route registration — no per-request allocation.
 func withAuthForKey(rk string, next http.Handler) http.Handler {
