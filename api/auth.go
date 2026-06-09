@@ -55,6 +55,10 @@ const (
 	// session length even while TCP kept the underlying session alive, forcing a
 	// needless re-login. 400 days is the practical browser cap for persistent cookies.
 	cookieMaxAge = 400 * 24 * time.Hour
+	// maxPortRange caps how many ports a single port-range route may span. Each
+	// port becomes its own listener (an http.Server or a TCP goroutine), so an
+	// unbounded range could exhaust file descriptors / sockets.
+	maxPortRange = 256
 )
 
 // ---- helpers ----------------------------------------------------------------
@@ -552,10 +556,12 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var body struct {
-			URL    string `json:"url"`
-			Target string `json:"target"`
-			Type   string `json:"type"`
-			Tls    bool   `json:"tls"`
+			URL      string `json:"url"`
+			Target   string `json:"target"`
+			Type     string `json:"type"`
+			Tls      bool   `json:"tls"`
+			RangeEnd int    `json:"range_end"` // last port of a port range; 0 = single route
+			Offset   bool   `json:"offset"`    // walk the target port alongside the listen port
 		}
 		if !decode(r, &body) || body.URL == "" || body.Target == "" {
 			fail(w, http.StatusBadRequest, "url and target required")
@@ -568,6 +574,23 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		if body.Type == "tcp" {
 			body.Tls = false
 		}
+		cert, key := "", ""
+		if body.Tls {
+			cert, key = DefaultCert, DefaultKey
+		}
+
+		host, startPort, err := splitHostPortNum(body.URL)
+		if err != nil {
+			fail(w, http.StatusBadRequest, "invalid url: expected host:port")
+			return
+		}
+		// Port-range route: expand into one row + listener per port, all sharing a
+		// range_group so the admin UI can manage them as a single logical route.
+		if body.RangeEnd > startPort {
+			createRouteRange(w, r, body.Type, host, startPort, body.RangeEnd, body.Target, body.Offset, body.Tls, cert, key)
+			return
+		}
+
 		// Validate against the live proxy state before touching the DB.
 		if OnRouteValidate != nil {
 			if err := OnRouteValidate(body.URL, body.Type); err != nil {
@@ -575,11 +598,7 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		cert, key := "", ""
-		if body.Tls {
-			cert, key = DefaultCert, DefaultKey
-		}
-		route, err := store.CreateRoute(r.Context(), body.URL, body.Target, body.Type, body.Tls, cert, key)
+		route, err := store.CreateRoute(r.Context(), body.URL, body.Target, body.Type, body.Tls, cert, key, "")
 		if err != nil {
 			fail(w, http.StatusConflict, "url already in use")
 			return
@@ -597,17 +616,40 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		ok(w, map[string]any{"route": route, "warning": regErr})
 
 	case http.MethodPut:
-		id, err := strconv.Atoi(r.URL.Query().Get("id"))
-		if err != nil {
-			fail(w, http.StatusBadRequest, "invalid id")
-			return
-		}
 		var body struct {
 			AllowedGroups   string `json:"allowed_groups"`
 			AllowedIPs      string `json:"allowed_ips"`
 			IPAuth          bool   `json:"ip_auth"`
 			PersistentLogin bool   `json:"persistent_login"`
 			Target          string `json:"target"`
+		}
+		// A port-range route is edited as a whole via ?group=. Access-control
+		// fields are identical across every port; target edits are not supported
+		// for ranges (the per-port offset makes a single target ambiguous).
+		if group := r.URL.Query().Get("group"); group != "" {
+			if !decode(r, &body) {
+				fail(w, http.StatusBadRequest, "invalid request")
+				return
+			}
+			if body.AllowedGroups != "" {
+				if rt, err := store.GetRouteByGroup(r.Context(), group); err == nil && rt.Type == "tcp" {
+					body.IPAuth = true
+				}
+			}
+			if _, err := store.UpdateRouteAccessByGroup(r.Context(), group, body.AllowedGroups, body.AllowedIPs, body.IPAuth, body.PersistentLogin); err != nil {
+				fail(w, http.StatusNotFound, "range group not found")
+				return
+			}
+			if OnRouteUpdate != nil {
+				OnRouteUpdate()
+			}
+			ok(w, map[string]bool{"ok": true})
+			return
+		}
+		id, err := strconv.Atoi(r.URL.Query().Get("id"))
+		if err != nil {
+			fail(w, http.StatusBadRequest, "invalid id")
+			return
 		}
 		if !decode(r, &body) {
 			fail(w, http.StatusBadRequest, "invalid request")
@@ -639,6 +681,24 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 		ok(w, map[string]bool{"ok": true})
 
 	case http.MethodDelete:
+		// Deleting a port-range route removes every port in the group at once.
+		if group := r.URL.Query().Get("group"); group != "" {
+			urls, err := store.DeleteRouteGroup(r.Context(), group)
+			if err != nil {
+				fail(w, http.StatusBadRequest, "range group not found")
+				return
+			}
+			if OnRouteDelete != nil {
+				for _, url := range urls {
+					OnRouteDelete(url)
+				}
+			}
+			if OnRouteUpdate != nil {
+				OnRouteUpdate()
+			}
+			ok(w, map[string]bool{"ok": true})
+			return
+		}
 		id, err := strconv.Atoi(r.URL.Query().Get("id"))
 		if err != nil {
 			fail(w, http.StatusBadRequest, "invalid id")
@@ -660,6 +720,84 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 	default:
 		fail(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// splitHostPortNum splits a "host:port" string and parses the numeric port.
+func splitHostPortNum(hostPort string) (host string, port int, err error) {
+	h, p, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		return "", 0, err
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil {
+		return "", 0, err
+	}
+	return h, n, nil
+}
+
+// createRouteRange expands a port range into one route + listener per port, all
+// sharing a generated range_group. Every port is validated up front; on a
+// mid-loop failure the already-created ports are rolled back so no partial range
+// is left behind. With offset set, each port forwards to a target port walked
+// from the base target port; otherwise every port forwards to the same target.
+func createRouteRange(w http.ResponseWriter, r *http.Request, routeType, host string, startPort, endPort int, target string, offset, tls bool, cert, key string) {
+	span := endPort - startPort + 1
+	if span > maxPortRange {
+		fail(w, http.StatusBadRequest, "port range too large (max "+strconv.Itoa(maxPortRange)+" ports)")
+		return
+	}
+
+	var targetHost string
+	var targetPort int
+	if offset {
+		var err error
+		targetHost, targetPort, err = splitHostPortNum(target)
+		if err != nil {
+			fail(w, http.StatusBadRequest, "offset target must be host:port")
+			return
+		}
+	}
+
+	// Validate every port before creating anything so a conflict aborts cleanly.
+	if OnRouteValidate != nil {
+		for p := startPort; p <= endPort; p++ {
+			u := net.JoinHostPort(host, strconv.Itoa(p))
+			if err := OnRouteValidate(u, routeType); err != nil {
+				fail(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+	}
+
+	rangeGroup := storage.NewRangeGroupID()
+	var regErr string
+	for p := startPort; p <= endPort; p++ {
+		u := net.JoinHostPort(host, strconv.Itoa(p))
+		tgt := target
+		if offset {
+			tgt = net.JoinHostPort(targetHost, strconv.Itoa(targetPort+(p-startPort)))
+		}
+		if _, err := store.CreateRoute(r.Context(), u, tgt, routeType, tls, cert, key, rangeGroup); err != nil {
+			// Roll back ports already created so we never leave a partial range.
+			if urls, derr := store.DeleteRouteGroup(r.Context(), rangeGroup); derr == nil && OnRouteDelete != nil {
+				for _, du := range urls {
+					OnRouteDelete(du)
+				}
+			}
+			fail(w, http.StatusConflict, "port "+strconv.Itoa(p)+" already in use")
+			return
+		}
+		if OnRouteRegister != nil {
+			if err := OnRouteRegister(u, tgt, routeType, tls, cert, key); err != nil {
+				slog.Warn("range route saved but not live", "url", u, "error", err)
+				regErr = err.Error()
+			}
+		}
+	}
+	if OnRouteUpdate != nil {
+		OnRouteUpdate()
+	}
+	ok(w, map[string]any{"range_group": rangeGroup, "count": span, "warning": regErr})
 }
 
 // ---- admin: global settings -------------------------------------------------

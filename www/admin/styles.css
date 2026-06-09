@@ -123,6 +123,7 @@ button:active, button.active {
 .badge-tcp    { background: rgba(20,120,180,0.18);  color: #0d6fa8; }
 .badge-config { background: rgba(120,120,120,0.15); color: #666; }
 .badge-ui     { background: rgba(45,99,133,0.2);    color: #2d6385; }
+.badge-range  { background: rgba(150,90,180,0.18);  color: #7a4a9a; }
 
 /* ── content panels ───────────────────────────────────────────────────────── */
 content {

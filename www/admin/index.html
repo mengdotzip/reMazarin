@@ -104,6 +104,24 @@
                   <input type="checkbox" id="newRouteTls"> TLS
                 </label>
               </div>
+              <div class="createRow" style="gap:10px;align-items:center">
+                <label style="font-size:12px;color:#2d6385;display:flex;align-items:center;gap:5px;cursor:pointer">
+                  <input type="checkbox" id="newRoutePortRange" onchange="onPortRangeChange()"> Port range
+                </label>
+              </div>
+              <div class="createRow" id="newRouteRangeRow" style="display:none">
+                <input type="number" id="newRouteRangeEnd" placeholder="end port" min="1" max="65535">
+              </div>
+              <div class="createRow" id="newRouteOffsetRow" style="display:none;gap:10px;align-items:center">
+                <label style="font-size:12px;color:#2d6385;display:flex;align-items:center;gap:5px;cursor:pointer">
+                  <input type="checkbox" id="newRouteOffset" checked> Offset target port
+                </label>
+              </div>
+              <div id="newRouteRangeHint" style="display:none;font-size:11px;color:#888;margin:0 4px 6px;">
+                Each port becomes its own listener (max 256). Offset walks the target port
+                alongside the listen port (e.g. <code>:2000→3000</code>, <code>:2001→3001</code>);
+                off forwards every port to the same target.
+              </div>
               <div class="createRow">
                 <button onclick="createRoute()" style="width:100%">+ Add</button>
               </div>

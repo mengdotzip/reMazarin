@@ -250,63 +250,103 @@ async function loadRoutes() {
     const list = document.getElementById('routeItems');
     list.innerHTML = '';
 
-    (routeData.routes || []).forEach(r => {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'item';
-        wrapper.style.cssText = 'flex-direction:column;align-items:stretch;cursor:default;';
-
-        const activeGroups = r.allowed_groups
-            ? r.allowed_groups.split(',').map(id => groups.find(g => String(g.id) === id.trim())?.name).filter(Boolean)
-            : [];
-        const groupHint = activeGroups.length
-            ? activeGroups.map(n => `<span class="tag">${n}</span>`).join('')
-            : '<span class="tag">public</span>';
-
-        const typeBadge   = `<span class="badge badge-${r.type || 'proxy'}">${r.type || 'proxy'}</span>`;
-        const sourceBadge = `<span class="badge badge-${r.source}">${r.source}</span>`;
-        const delBtn = r.source === 'ui'
-            ? `<button class="delBtn" title="Delete route">×</button>`
-            : '';
-
-        const header = document.createElement('div');
-        header.style.cssText = 'display:flex;align-items:center;gap:8px;';
-        header.innerHTML = `
-            <div style="flex:1;min-width:0">
-                <div class="itemMain">${r.url}</div>
-                <div class="itemSub">→ ${r.target}</div>
-            </div>
-            <div class="tags">${groupHint}</div>
-            ${typeBadge}${sourceBadge}
-            ${delBtn}
-            <button class="editBtn" style="flex-shrink:0;font-size:11px;padding:0 10px;height:24px">Edit</button>
-        `;
-
-        if (r.source === 'ui') {
-            header.querySelector('.delBtn').addEventListener('click', e => {
-                e.stopPropagation();
-                deleteRoute(r.id, r.url);
-            });
+    // Collapse port-range routes: every port shares a range_group and is rendered
+    // as a single logical row. Non-range routes render one row each.
+    const routes = routeData.routes || [];
+    const byGroup = {};
+    routes.forEach(r => { if (r.range_group) (byGroup[r.range_group] ||= []).push(r); });
+    const rendered = new Set();
+    routes.forEach(r => {
+        if (r.range_group) {
+            if (rendered.has(r.range_group)) return;
+            rendered.add(r.range_group);
+            renderRouteItem(byGroup[r.range_group], groups, list);
+        } else {
+            renderRouteItem([r], groups, list);
         }
-
-        const editPanel = buildRouteEditPanel(r, groups);
-        editPanel.style.display = 'none';
-        header.querySelector('.editBtn').addEventListener('click', () => {
-            editPanel.style.display = editPanel.style.display === 'none' ? '' : 'none';
-        });
-
-        wrapper.appendChild(header);
-        wrapper.appendChild(editPanel);
-        list.appendChild(wrapper);
     });
 }
 
-function buildRouteEditPanel(route, groups) {
+// portOf extracts the numeric port from a "host:port" url.
+function portOf(url) { return parseInt(url.slice(url.lastIndexOf(':') + 1), 10); }
+
+// renderRouteItem renders one route, or a collapsed port-range route when members
+// holds more than one port (all sharing a range_group).
+function renderRouteItem(members, groups, list) {
+    const rep = members[0]; // shared fields (type/source/access) are identical across a range
+    const isGroup = !!rep.range_group;
+
+    let displayUrl = rep.url, displaySub = `→ ${rep.target}`, rangeBadge = '';
+    if (isGroup && members.length > 1) {
+        const ports = members.map(m => portOf(m.url)).sort((a, b) => a - b);
+        const host = rep.url.slice(0, rep.url.lastIndexOf(':'));
+        displayUrl = `${host}:${ports[0]}–${ports[ports.length - 1]}`;
+        const sorted = [...members].sort((a, b) => portOf(a.url) - portOf(b.url));
+        const offset = sorted[0].target !== sorted[sorted.length - 1].target;
+        displaySub = offset
+            ? `→ ${sorted[0].target} … ${sorted[sorted.length - 1].target}`
+            : `→ ${rep.target}`;
+        rangeBadge = `<span class="badge badge-range">${members.length} ports</span>`;
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'item';
+    wrapper.style.cssText = 'flex-direction:column;align-items:stretch;cursor:default;';
+
+    const activeGroups = rep.allowed_groups
+        ? rep.allowed_groups.split(',').map(id => groups.find(g => String(g.id) === id.trim())?.name).filter(Boolean)
+        : [];
+    const groupHint = activeGroups.length
+        ? activeGroups.map(n => `<span class="tag">${n}</span>`).join('')
+        : '<span class="tag">public</span>';
+
+    const typeBadge   = `<span class="badge badge-${rep.type || 'proxy'}">${rep.type || 'proxy'}</span>`;
+    const sourceBadge = `<span class="badge badge-${rep.source}">${rep.source}</span>`;
+    const delBtn = rep.source === 'ui'
+        ? `<button class="delBtn" title="Delete route">×</button>`
+        : '';
+
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;align-items:center;gap:8px;';
+    header.innerHTML = `
+        <div style="flex:1;min-width:0">
+            <div class="itemMain">${displayUrl}</div>
+            <div class="itemSub">${displaySub}</div>
+        </div>
+        <div class="tags">${groupHint}</div>
+        ${typeBadge}${rangeBadge}${sourceBadge}
+        ${delBtn}
+        <button class="editBtn" style="flex-shrink:0;font-size:11px;padding:0 10px;height:24px">Edit</button>
+    `;
+
+    if (rep.source === 'ui') {
+        header.querySelector('.delBtn').addEventListener('click', e => {
+            e.stopPropagation();
+            if (isGroup) deleteRouteGroup(rep.range_group, displayUrl, members.length);
+            else deleteRoute(rep.id, rep.url);
+        });
+    }
+
+    const editPanel = buildRouteEditPanel(rep, groups, isGroup);
+    editPanel.style.display = 'none';
+    header.querySelector('.editBtn').addEventListener('click', () => {
+        editPanel.style.display = editPanel.style.display === 'none' ? '' : 'none';
+    });
+
+    wrapper.appendChild(header);
+    wrapper.appendChild(editPanel);
+    list.appendChild(wrapper);
+}
+
+function buildRouteEditPanel(route, groups, isGroup) {
     const panel = document.createElement('div');
     panel.className = 'routeEdit';
 
     const isTcp = route.type === 'tcp';
 
-    const targetRow = route.source === 'ui' ? `
+    // Per-port backend edits are not offered for a port range — the offset makes a
+    // single target ambiguous. Access control (below) applies to every port.
+    const targetRow = (route.source === 'ui' && !isGroup) ? `
         <div class="routeEditRow">
             <label>Backend</label>
             <input type="text" class="targetInput" value="${route.target}" placeholder="host:port">
@@ -390,7 +430,8 @@ function buildRouteEditPanel(route, groups) {
         };
         const ti = panel.querySelector('.targetInput');
         if (ti) body.target = ti.value;
-        await api('PUT', 'admin/routes?id=' + route.id, body);
+        const query = isGroup ? 'group=' + encodeURIComponent(route.range_group) : 'id=' + route.id;
+        await api('PUT', 'admin/routes?' + query, body);
         loadRoutes();
     });
 
@@ -401,6 +442,14 @@ function onRouteTypeChange() {
     const isTcp = document.getElementById('newRouteType').value === 'tcp';
     document.getElementById('newRouteTlsRow').style.display = isTcp ? 'none' : '';
     if (isTcp) document.getElementById('newRouteTls').checked = false;
+}
+
+function onPortRangeChange() {
+    const on = document.getElementById('newRoutePortRange').checked;
+    const disp = on ? '' : 'none';
+    document.getElementById('newRouteRangeRow').style.display    = disp;
+    document.getElementById('newRouteOffsetRow').style.display   = on ? 'flex' : 'none';
+    document.getElementById('newRouteRangeHint').style.display   = disp;
 }
 
 async function loadSettings() {
@@ -433,7 +482,18 @@ async function createRoute() {
         msg.textContent = 'URL and target are required.';
         return;
     }
-    const data = await api('POST', 'admin/routes', { url, target, type, tls });
+    const body = { url, target, type, tls };
+    if (document.getElementById('newRoutePortRange').checked) {
+        const end = parseInt(document.getElementById('newRouteRangeEnd').value, 10);
+        if (!end) {
+            msg.style.display = '';
+            msg.textContent = 'Enter the end port for the range.';
+            return;
+        }
+        body.range_end = end;
+        body.offset = document.getElementById('newRouteOffset').checked;
+    }
+    const data = await api('POST', 'admin/routes', body);
     if (!data) return;
     msg.style.display = '';
     if (data.error) {
@@ -442,15 +502,21 @@ async function createRoute() {
     }
     document.getElementById('newRouteUrl').value = '';
     document.getElementById('newRouteTarget').value = '';
-    msg.textContent = data.warning
-        ? `Saved — ${data.warning}`
-        : '✓ Route added and live.';
+    document.getElementById('newRouteRangeEnd').value = '';
+    const added = data.count ? `${data.count} routes added` : 'Route added and live';
+    msg.textContent = data.warning ? `Saved — ${data.warning}` : `✓ ${added}.`;
     loadRoutes();
 }
 
 async function deleteRoute(id, url) {
     if (!confirm(`Delete route "${url}"?\nThis cannot be undone.`)) return;
     await api('DELETE', 'admin/routes?id=' + id);
+    loadRoutes();
+}
+
+async function deleteRouteGroup(rangeGroup, url, count) {
+    if (!confirm(`Delete port-range route "${url}" (${count} ports)?\nThis cannot be undone.`)) return;
+    await api('DELETE', 'admin/routes?group=' + encodeURIComponent(rangeGroup));
     loadRoutes();
 }
 

@@ -16,6 +16,32 @@ Unauthenticated requests to the admin host receive a plain HTTP 401 — the HTML
 
 Access control changes made through the admin panel take effect **immediately** — no restart required. The proxy keeps an in-memory cache of route access rules. Saving a route in the admin panel triggers an instant cache refresh. The cache also refreshes automatically every 5 minutes, which covers any manual database edits.
 
+## Port-range routes
+
+When creating a route in the admin panel you can tick **Port range** and give an
+end port. The route is expanded into one route per port across the range
+(`host:2000`, `host:2001`, … `host:2010`) — each port needs its own listener, so
+a range cannot be a single socket. Ranges are supported for both `proxy` and
+`tcp` routes and are capped at **256 ports** to avoid exhausting sockets/file
+descriptors.
+
+**Target mapping** is controlled by the **Offset target port** checkbox:
+
+| Offset | Behaviour |
+|--------|-----------|
+| **On** | The target port walks alongside the listen port, starting from the target you entered: `:2000→host:3000`, `:2001→host:3001`, … This is the usual choice for TCP passthrough (passive FTP, RTP media, game servers). |
+| **Off** | Every port in the range forwards to the same single target. |
+
+All ports of a range share a hidden `range_group` id. The admin panel collapses
+them into a **single row** displayed as `host:2000–2010`, and editing access
+control or deleting the route applies to the whole range at once. Per-port
+backend edits are not offered for a range (the offset makes a single target
+ambiguous); access control (groups, IP allowlist, IP session auth) is identical
+across every port.
+
+If any port in the range conflicts with an existing route, the whole create is
+rejected and nothing is added — there are no partial ranges.
+
 ## Cookie policies
 
 Each route can have an independent cookie policy that controls how the session cookie behaves.

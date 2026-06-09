@@ -55,7 +55,7 @@ On first run the database is seeded with:
 | Users   | View users, assign/remove group membership, delete users |
 | Groups  | Create and delete groups |
 | Invites | Generate invite codes with an optional description and configurable expiry (default 24 h) |
-| Routes  | Set allowed groups and/or IP allowlists per route, configure cookie lifetime and session duration |
+| Routes  | Create routes (incl. **port ranges**), set allowed groups and/or IP allowlists per route, configure cookie lifetime and session duration |
 | Metrics | Live view of active sessions, per-route request counts, access log (last 200 events), and login failures |
 
 Routes with no groups and no IPs assigned are **public**. Routes can be restricted by:
@@ -83,12 +83,6 @@ url    = "api.example.com:443"
 target = "myfunction"
 type   = "api"
 ```
-
-## Database migrations
-
-Schema changes are managed through numbered SQL files in `storage/migrations/`, embedded into the binary at compile time. On startup, reMazarin automatically applies any unapplied migrations. Existing databases are bootstrapped transparently — no manual steps needed when upgrading.
-
-See [docs/migrations.md](docs/migrations.md) for the migration history and instructions for adding new migrations.
 
 ## Registration
 

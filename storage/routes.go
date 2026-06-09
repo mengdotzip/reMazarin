@@ -24,6 +24,7 @@ type Route struct {
 	AllowedIPs      string    `json:"allowed_ips"`
 	IPAuth          bool      `json:"ip_auth"`
 	PersistentLogin bool      `json:"persistent_login"`
+	RangeGroup      string    `json:"range_group"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
@@ -95,7 +96,7 @@ func (s *Storage) SyncRoutes(routes []ConfigRoute) error {
 func (s *Storage) GetAllRoutes(ctx context.Context) ([]Route, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, url, target, type, tls, cert, key, enabled, source,
-		       allowed_groups, allowed_ips, ip_auth, persistent_login, created_at, updated_at
+		       allowed_groups, allowed_ips, ip_auth, persistent_login, range_group, created_at, updated_at
 		FROM proxy_routes
 		WHERE enabled = TRUE
 		ORDER BY url`)
@@ -110,7 +111,7 @@ func (s *Storage) GetAllRoutes(ctx context.Context) ([]Route, error) {
 		if err := rows.Scan(
 			&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
 			&r.Enabled, &r.Source,
-			&r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin,
+			&r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin, &r.RangeGroup,
 			&r.CreatedAt, &r.UpdatedAt,
 		); err != nil {
 			return nil, xerrors.Newf("scan route: %w", err)
@@ -124,12 +125,12 @@ func (s *Storage) GetRouteByUrl(ctx context.Context, url string) (*Route, error)
 	var r Route
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, url, target, type, tls, cert, key, enabled, source,
-		       allowed_groups, allowed_ips, ip_auth, persistent_login, created_at, updated_at
+		       allowed_groups, allowed_ips, ip_auth, persistent_login, range_group, created_at, updated_at
 		FROM proxy_routes WHERE url = ? AND enabled = TRUE`, url,
 	).Scan(
 		&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
 		&r.Enabled, &r.Source,
-		&r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin,
+		&r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin, &r.RangeGroup,
 		&r.CreatedAt, &r.UpdatedAt,
 	)
 	if err != nil {
@@ -155,17 +156,19 @@ func (s *Storage) UpdateRouteAccess(ctx context.Context, id int, allowedGroups, 
 	return nil
 }
 
-// CreateRoute adds a new route created via the admin UI (source = 'ui').
-func (s *Storage) CreateRoute(ctx context.Context, url, target, routeType string, tls bool, cert, key string) (*Route, error) {
+// CreateRoute adds a new route created via the admin UI (source = 'ui'). For a
+// single route rangeGroup is empty; for one port of an expanded port range it
+// carries the shared range id linking all ports of that range together.
+func (s *Storage) CreateRoute(ctx context.Context, url, target, routeType string, tls bool, cert, key, rangeGroup string) (*Route, error) {
 	var r Route
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO proxy_routes (url, target, type, tls, cert, key, source, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, 'ui', TRUE)
+		INSERT INTO proxy_routes (url, target, type, tls, cert, key, source, enabled, range_group)
+		VALUES (?, ?, ?, ?, ?, ?, 'ui', TRUE, ?)
 		RETURNING id, url, target, type, tls, cert, key, enabled, source,
-		          allowed_groups, allowed_ips, ip_auth, persistent_login, created_at, updated_at`,
-		url, target, routeType, tls, cert, key,
+		          allowed_groups, allowed_ips, ip_auth, persistent_login, range_group, created_at, updated_at`,
+		url, target, routeType, tls, cert, key, rangeGroup,
 	).Scan(&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
-		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin,
+		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin, &r.RangeGroup,
 		&r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return nil, xerrors.Newf("create route: %w", err)
@@ -188,6 +191,71 @@ func (s *Storage) DeleteRoute(ctx context.Context, id int) (string, error) {
 	return url, nil
 }
 
+// UpdateRouteAccessByGroup applies the same access-control settings to every
+// route in a port-range group. Access fields are identical across all ports of
+// a range, so a single UPDATE covers them. Returns the number of rows updated.
+func (s *Storage) UpdateRouteAccessByGroup(ctx context.Context, rangeGroup, allowedGroups, allowedIPs string, ipAuth, persistentLogin bool) (int, error) {
+	if rangeGroup == "" {
+		return 0, xerrors.Newf("empty range group")
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE proxy_routes SET allowed_groups = ?, allowed_ips = ?, ip_auth = ?, persistent_login = ? WHERE range_group = ?`,
+		allowedGroups, allowedIPs, ipAuth, persistentLogin, rangeGroup)
+	if err != nil {
+		return 0, xerrors.Newf("update route access by group: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return 0, xerrors.Newf("range group not found")
+	}
+	slog.Info("route range access updated", "range_group", rangeGroup, "count", n, "allowed_groups", allowedGroups, "allowed_ips", allowedIPs, "ip_auth", ipAuth)
+	return int(n), nil
+}
+
+// DeleteRouteGroup deletes every UI-sourced route in a port-range group and
+// returns their URLs for proxy cleanup.
+func (s *Storage) DeleteRouteGroup(ctx context.Context, rangeGroup string) ([]string, error) {
+	if rangeGroup == "" {
+		return nil, xerrors.Newf("empty range group")
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`DELETE FROM proxy_routes WHERE range_group = ? AND source = 'ui' RETURNING url`, rangeGroup)
+	if err != nil {
+		return nil, xerrors.Newf("delete route group: %w", err)
+	}
+	defer rows.Close()
+	var urls []string
+	for rows.Next() {
+		var url string
+		if err := rows.Scan(&url); err != nil {
+			return nil, xerrors.Newf("scan deleted url: %w", err)
+		}
+		urls = append(urls, url)
+	}
+	if len(urls) == 0 {
+		return nil, xerrors.Newf("range group not found")
+	}
+	slog.Info("route range deleted", "range_group", rangeGroup, "count", len(urls))
+	return urls, rows.Err()
+}
+
+// GetRouteByGroup returns one representative route from a port-range group, used
+// to inspect shared properties (type, source) without loading the whole range.
+func (s *Storage) GetRouteByGroup(ctx context.Context, rangeGroup string) (*Route, error) {
+	var r Route
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, url, target, type, tls, cert, key, enabled, source,
+		       allowed_groups, allowed_ips, ip_auth, persistent_login, range_group, created_at, updated_at
+		FROM proxy_routes WHERE range_group = ? ORDER BY url LIMIT 1`, rangeGroup,
+	).Scan(&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
+		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin, &r.RangeGroup,
+		&r.CreatedAt, &r.UpdatedAt)
+	if err != nil {
+		return nil, xerrors.Newf("get route by group: %w", err)
+	}
+	return &r, nil
+}
+
 // UpdateRouteEndpoint updates the backend target for a UI-sourced route.
 func (s *Storage) UpdateRouteEndpoint(ctx context.Context, id int, target string) error {
 	result, err := s.db.ExecContext(ctx,
@@ -208,10 +276,10 @@ func (s *Storage) GetRouteByID(ctx context.Context, id int) (*Route, error) {
 	var r Route
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, url, target, type, tls, cert, key, enabled, source,
-		       allowed_groups, allowed_ips, ip_auth, persistent_login, created_at, updated_at
+		       allowed_groups, allowed_ips, ip_auth, persistent_login, range_group, created_at, updated_at
 		FROM proxy_routes WHERE id = ?`, id,
 	).Scan(&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
-		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin,
+		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin, &r.RangeGroup,
 		&r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return nil, xerrors.Newf("get route by id: %w", err)
@@ -237,6 +305,10 @@ func (s *Storage) EnsureRouteGroup(ctx context.Context, routeURL, groupName stri
 	}
 	return nil
 }
+
+// NewRangeGroupID returns a fresh random identifier shared by all ports of a
+// single port-range route.
+func NewRangeGroupID() string { return randHex(8) }
 
 // RouteAllows returns true if the given group IDs satisfy the route's allowed_groups.
 // An empty allowed_groups string means the route is public.
