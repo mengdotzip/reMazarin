@@ -36,7 +36,7 @@ func setupOTelSDK(ctx context.Context, cfg *Config) (shutdown func(context.Conte
 
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
-			semconv.ServiceName("remazarin"),
+			semconv.ServiceName(config.Otel.ServiceName),
 			semconv.ServiceVersion(version),
 		),
 	)

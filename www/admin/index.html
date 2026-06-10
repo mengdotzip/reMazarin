@@ -13,6 +13,7 @@
       <button data-view="users" class="active">USERS</button>
       <button data-view="routes">ROUTES</button>
       <button data-view="metrics">METRICS</button>
+      <button data-view="throttle">THROTTLE</button>
     </div>
 
     <div class="contentContainer">
@@ -205,6 +206,49 @@
             <div id="routeStatItems" class="itemList"></div>
           </content>
 
+          <content class="metricsEvents">
+            <div class="panelHeader">
+              <span class="panelTitle">Events</span>
+              <span id="eventStatsSummary" class="hint">every connection — in-memory, since restart</span>
+            </div>
+            <div id="eventStatItems" class="eventStatRow"></div>
+            <div id="recentEventItems" class="itemList"></div>
+          </content>
+
+          <content class="metricsBans">
+            <div class="panelHeader">
+              <span class="panelTitle">Banned IPs</span>
+              <span id="banCount" class="hint"></span>
+            </div>
+            <div class="createRow">
+              <input type="text" id="banIpInput" placeholder="IP to ban">
+              <input type="number" id="banDurInput" placeholder="sec (0=∞)" min="0" style="width:90px;flex:0 0 90px">
+              <button onclick="manualBan()">Ban</button>
+            </div>
+            <div id="banItems" class="itemList"></div>
+          </content>
+
+        </div>
+      </div>
+
+      <!-- ── THROTTLE VIEW ──────────────────────────────────────────────────────── -->
+      <div class="view" id="view-throttle">
+        <div class="throttleContainer">
+          <content class="throttlePolicies">
+            <div class="panelHeader">
+              <span class="panelTitle">Throttle &amp; Auto-ban Policies</span>
+              <button class="iconBtn" onclick="loadThrottle()" title="Refresh">↺</button>
+            </div>
+            <p class="hint" style="padding:0 4px;margin:0 0 10px">
+              Per-tier rate limit and auto-ban, keyed by client IP. An unseen IP starts at
+              <b>anonymous</b> (the strictest tier) and is promoted once it authenticates.
+            </p>
+            <div id="policyItems"></div>
+            <div class="createRow" style="margin-top:12px">
+              <select id="newPolicyGroup"><option value="">Add group override…</option></select>
+              <button onclick="addGroupPolicy()">Add</button>
+            </div>
+          </content>
         </div>
       </div>
 

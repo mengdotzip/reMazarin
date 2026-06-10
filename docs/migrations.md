@@ -35,6 +35,8 @@ That's it. The runner will apply it on the next startup and record it in `schema
 | 004 | `004_ip_session_auth.sql` | `ip_auth` on `proxy_routes`; `client_ip` on `sessions` |
 | 012 | `012_cookie_settings.sql` | Replaces the never-enforced three-way `cookie_policy` on `proxy_routes` with a boolean `persistent_login` (default true): per-route gate for cookie auth |
 | 013 | `013_drop_route_session_fields.sql` | Drops the never-enforced per-route `renew_on_access` and `session_duration` from `proxy_routes` (both are global, in `settings`) |
+| 014 | `014_route_range_group.sql` | `range_group` on `proxy_routes` — links the ports of a port-range route |
+| 015 | `015_throttle_bans_require_login.sql` | `require_login` on `proxy_routes` (the "signed-in" access mode); `throttle_policies` (per-tier rate-limit + auto-ban config) and `banned_ips` tables |
 
 ## Existing databases
 

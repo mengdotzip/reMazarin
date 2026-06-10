@@ -70,16 +70,18 @@ OpenTelemetry tracing integration. When enabled, HTTP handlers are wrapped with 
 [otel]
 enabled          = false
 endpoint         = "localhost:4317"
+service_name     = "remazarin"
 interval         = 15
 runtime_interval = 30
 ```
 
-| Key               | Type    | Default | Description                                                                      |
-|-------------------|---------|---------|----------------------------------------------------------------------------------|
-| `enabled`         | bool    | `false` | Enable OpenTelemetry tracing and metrics.                                        |
-| `endpoint`        | string  | `""`    | OTLP gRPC exporter endpoint (`host:port`, e.g. `localhost:4317`). Required when `enabled = true`. |
-| `interval`        | int     | `15`    | Metric export interval in seconds. Also controls the trace batch flush interval. |
-| `runtime_interval`| int     | `30`    | How often Go runtime memstats (GC, heap, goroutines) are read, in seconds.       |
+| Key               | Type    | Default        | Description                                                                      |
+|-------------------|---------|----------------|----------------------------------------------------------------------------------|
+| `enabled`         | bool    | `false`        | Enable OpenTelemetry tracing and metrics.                                        |
+| `endpoint`        | string  | `""`           | OTLP gRPC exporter endpoint (`host:port`, e.g. `localhost:4317`). Required when `enabled = true`. |
+| `service_name`    | string  | `"remazarin"`  | `service.name` resource attribute on all traces/metrics. Set a distinct value per instance to tell multiple reMazarin deployments apart in your backend. |
+| `interval`        | int     | `15`           | Metric export interval in seconds. Also controls the trace batch flush interval. |
+| `runtime_interval`| int     | `30`           | How often Go runtime memstats (GC, heap, goroutines) are read, in seconds.       |
 
 ---
 

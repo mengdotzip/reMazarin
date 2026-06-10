@@ -6,8 +6,15 @@ import (
 	"strconv"
 )
 
-// RouteStats is wired from main.go to proxy.GetRouteStats.
-var RouteStats func() map[string]int64
+// These are wired from main.go to the corresponding proxy functions. They are
+// function vars (not direct imports) because proxy imports api — a direct
+// dependency the other way would be an import cycle.
+var (
+	RouteStats   func() map[string]int64   // proxy.GetRouteStats
+	EventStats   func() map[string]int64   // proxy.GetEventStats
+	RecentEvents func() any                // proxy.GetRecentEvents
+	ActiveBans   func() []storage.BannedIP // proxy.GetActiveBans
+)
 
 func HandleAdminMetrics(w http.ResponseWriter, r *http.Request) {
 	if requireAdmin(w, r) == nil {
@@ -46,11 +53,34 @@ func HandleAdminMetrics(w http.ResponseWriter, r *http.Request) {
 		if accessLog == nil {
 			accessLog = []storage.AccessEvent{}
 		}
+		var eventStats map[string]int64
+		if EventStats != nil {
+			eventStats = EventStats()
+		}
+		if eventStats == nil {
+			eventStats = map[string]int64{}
+		}
+		var recentEvents any = []any{}
+		if RecentEvents != nil {
+			if re := RecentEvents(); re != nil {
+				recentEvents = re
+			}
+		}
+		var bans []storage.BannedIP
+		if ActiveBans != nil {
+			bans = ActiveBans()
+		}
+		if bans == nil {
+			bans = []storage.BannedIP{}
+		}
 		ok(w, map[string]any{
 			"sessions":      sessions,
 			"route_stats":   stats,
 			"auth_failures": failures,
 			"access_log":    accessLog,
+			"event_stats":   eventStats,
+			"recent_events": recentEvents,
+			"banned_ips":    bans,
 		})
 
 	case http.MethodDelete:

@@ -31,6 +31,7 @@ func InitBuiltin() error {
 		{"admin/routes", HandleAdminRoutes},
 		{"admin/settings", HandleAdminSettings},
 		{"admin/metrics", HandleAdminMetrics},
+		{"admin/throttle", HandleAdminThrottle},
 		{"auth/sessions", HandleUserSessions},
 		{"auth/extend", HandleExtendSession},
 	} {

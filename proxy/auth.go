@@ -42,6 +42,8 @@ func InitAuth(ctx context.Context, s *storage.Storage) func() {
 	globalSettings.Store(storage.Settings{SessionDurationHours: 168, RenewOnAccess: true})
 	refreshCache()
 
+	reloadThrottle()
+
 	logDrained := make(chan struct{})
 	go func() {
 		defer close(logDrained)
@@ -61,6 +63,8 @@ func InitAuth(ctx context.Context, s *storage.Storage) func() {
 				authStore.CleanupExpiredSessions(bctx)
 				authStore.CleanupExpiredInvites(bctx)
 				authStore.CleanupOldAccessLog(bctx)
+				authStore.CleanupExpiredBans(bctx)
+				sweepBuckets()
 			case <-ctx.Done():
 				return
 			}
@@ -91,6 +95,7 @@ func refreshCache() {
 	if s, err := authStore.GetSettings(context.Background()); err == nil {
 		globalSettings.Store(s)
 	}
+	reloadThrottle()
 	slog.Debug("auth cache refreshed", "routes", len(routes))
 }
 
@@ -177,9 +182,25 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 			return
 		}
 
+		clientIP := extractClientIP(r)
+
+		// Cheapest gates first, before any DB work: a banned IP is dropped, then
+		// the per-tier rate limit (anonymous by default for unseen IPs).
+		if IsBanned(clientIP) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			RecordEvent(clientIP, rk, OutcomeBanned)
+			return
+		}
+		if allowed, retry := Allow(clientIP); !allowed {
+			w.Header().Set("Retry-After", strconv.Itoa(retry))
+			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+			RecordEvent(clientIP, rk, OutcomeRateLimited)
+			RecordFailure(clientIP)
+			return
+		}
+
 		m := authCache.Load().(map[string]cachedRoute)
 		route, found := m[rk]
-		clientIP := extractClientIP(r)
 
 		// Verbose auth tracing. match_ip is the IP actually used for matching;
 		// remote_addr and the forwarding headers reveal whether a fronting
@@ -198,22 +219,23 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 		if !found {
 			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
 			slog.Debug("auth deny: route not in cache", base...)
-			logAccess(clientIP, "Unauthorized User", rk)
+			denyAuth(clientIP, rk)
 			return
 		}
 
 		base = append(base,
 			"ip_auth", route.IPAuth,
 			"persistent_login", route.PersistentLogin,
+			"require_login", route.RequireLogin,
 			"allowed_groups", route.AllowedGroups,
 			"allowed_ips", route.AllowedIPs,
 		)
 
 		// Public route: no restrictions configured.
-		if !route.IPAuth && route.AllowedGroups == "" && route.AllowedIPs == "" {
+		if !route.IPAuth && route.AllowedGroups == "" && route.AllowedIPs == "" && !route.RequireLogin {
 			slog.Debug("auth allow: public route", base...)
 			logAccess(clientIP, "", rk)
-			RecordRequest(rk)
+			RecordEvent(clientIP, rk, OutcomeServed)
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -236,7 +258,8 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 				}
 				slog.Debug("auth allow: ip session", append(base, "user", sg.Username, "session_groups", sg.GroupIDs)...)
 				logAccess(clientIP, sg.Username, rk)
-				RecordRequest(rk)
+				RecordEvent(clientIP, rk, OutcomeServed)
+				SetTier(clientIP, ResolveTier(sg.GroupIDs))
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -247,7 +270,7 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 			if ipAllows(route, clientIP) {
 				slog.Debug("auth allow: ip allowlist", base...)
 				logAccess(clientIP, "", rk)
-				RecordRequest(rk)
+				RecordEvent(clientIP, rk, OutcomeServed)
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -261,17 +284,15 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 		if !route.PersistentLogin {
 			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
 			slog.Debug("auth deny: persistent-login (cookie) auth disabled for route", base...)
-			logAccess(clientIP, "Unauthorized User", rk)
-			RecordRequest(rk)
+			denyAuth(clientIP, rk)
 			return
 		}
 
-		// Cookie-based group auth.
-		if len(route.groupSet) == 0 {
+		// Cookie auth needs either an allowed group or require_login (any session).
+		if len(route.groupSet) == 0 && !route.RequireLogin {
 			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
 			slog.Debug("auth deny: no allowed groups and ip checks failed", base...)
-			logAccess(clientIP, "Unauthorized User", rk)
-			RecordRequest(rk)
+			denyAuth(clientIP, rk)
 			return
 		}
 
@@ -279,23 +300,21 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 		if err != nil {
 			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
 			slog.Debug("auth deny: no session cookie", base...)
-			logAccess(clientIP, "Unauthorized User", rk)
-			RecordRequest(rk)
+			denyAuth(clientIP, rk)
 			return
 		}
 		sg, err := authStore.ValidateSessionAndGroups(r.Context(), c.Value)
 		if err != nil {
 			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
 			slog.Debug("auth deny: invalid/expired session cookie", append(base, "error", err.Error())...)
-			logAccess(clientIP, "Unauthorized User", rk)
-			RecordRequest(rk)
+			denyAuth(clientIP, rk)
 			return
 		}
-		if !groupsAllow(route.groupSet, sg.GroupIDs) {
+		// require_login accepts any valid session; otherwise enforce group membership.
+		if !route.RequireLogin && !groupsAllow(route.groupSet, sg.GroupIDs) {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			slog.Debug("auth deny: cookie user not in allowed group", append(base, "user", sg.Username, "session_groups", sg.GroupIDs)...)
-			logAccess(clientIP, "Unauthorized User", rk)
-			RecordRequest(rk)
+			denyAuth(clientIP, rk)
 			return
 		}
 		if gs.RenewOnAccess {
@@ -307,9 +326,18 @@ func withAuthForKey(rk string, next http.Handler) http.Handler {
 		// independent; neither path rewrites the other's cookie.
 		slog.Debug("auth allow: cookie session", append(base, "user", sg.Username)...)
 		logAccess(clientIP, sg.Username, rk)
-		RecordRequest(rk)
+		RecordEvent(clientIP, rk, OutcomeServed)
+		SetTier(clientIP, ResolveTier(sg.GroupIDs))
 		next.ServeHTTP(w, r)
 	})
+}
+
+// denyAuth records an HTTP authorization denial: the DB access-log entry plus the
+// in-memory denied event, and feeds the failure counter that drives auto-ban.
+func denyAuth(clientIP, rk string) {
+	logAccess(clientIP, "Unauthorized User", rk)
+	RecordEvent(clientIP, rk, OutcomeDenied)
+	RecordFailure(clientIP)
 }
 
 func logAccess(ip, username, route string) {

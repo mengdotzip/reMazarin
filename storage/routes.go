@@ -24,6 +24,7 @@ type Route struct {
 	AllowedIPs      string    `json:"allowed_ips"`
 	IPAuth          bool      `json:"ip_auth"`
 	PersistentLogin bool      `json:"persistent_login"`
+	RequireLogin    bool      `json:"require_login"`
 	RangeGroup      string    `json:"range_group"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
@@ -96,7 +97,7 @@ func (s *Storage) SyncRoutes(routes []ConfigRoute) error {
 func (s *Storage) GetAllRoutes(ctx context.Context) ([]Route, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, url, target, type, tls, cert, key, enabled, source,
-		       allowed_groups, allowed_ips, ip_auth, persistent_login, range_group, created_at, updated_at
+		       allowed_groups, allowed_ips, ip_auth, persistent_login, require_login, range_group, created_at, updated_at
 		FROM proxy_routes
 		WHERE enabled = TRUE
 		ORDER BY url`)
@@ -111,7 +112,7 @@ func (s *Storage) GetAllRoutes(ctx context.Context) ([]Route, error) {
 		if err := rows.Scan(
 			&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
 			&r.Enabled, &r.Source,
-			&r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin, &r.RangeGroup,
+			&r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin, &r.RequireLogin, &r.RangeGroup,
 			&r.CreatedAt, &r.UpdatedAt,
 		); err != nil {
 			return nil, xerrors.Newf("scan route: %w", err)
@@ -125,12 +126,12 @@ func (s *Storage) GetRouteByUrl(ctx context.Context, url string) (*Route, error)
 	var r Route
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, url, target, type, tls, cert, key, enabled, source,
-		       allowed_groups, allowed_ips, ip_auth, persistent_login, range_group, created_at, updated_at
+		       allowed_groups, allowed_ips, ip_auth, persistent_login, require_login, range_group, created_at, updated_at
 		FROM proxy_routes WHERE url = ? AND enabled = TRUE`, url,
 	).Scan(
 		&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
 		&r.Enabled, &r.Source,
-		&r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin, &r.RangeGroup,
+		&r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin, &r.RequireLogin, &r.RangeGroup,
 		&r.CreatedAt, &r.UpdatedAt,
 	)
 	if err != nil {
@@ -141,10 +142,10 @@ func (s *Storage) GetRouteByUrl(ctx context.Context, url string) (*Route, error)
 
 // UpdateRouteAccess updates access-control fields for a route. It does NOT touch
 // routing config (url, target, type, tls, cert, key).
-func (s *Storage) UpdateRouteAccess(ctx context.Context, id int, allowedGroups, allowedIPs string, ipAuth, persistentLogin bool) error {
+func (s *Storage) UpdateRouteAccess(ctx context.Context, id int, allowedGroups, allowedIPs string, ipAuth, persistentLogin, requireLogin bool) error {
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE proxy_routes SET allowed_groups = ?, allowed_ips = ?, ip_auth = ?, persistent_login = ? WHERE id = ?`,
-		allowedGroups, allowedIPs, ipAuth, persistentLogin, id)
+		`UPDATE proxy_routes SET allowed_groups = ?, allowed_ips = ?, ip_auth = ?, persistent_login = ?, require_login = ? WHERE id = ?`,
+		allowedGroups, allowedIPs, ipAuth, persistentLogin, requireLogin, id)
 	if err != nil {
 		return xerrors.Newf("update route access: %w", err)
 	}
@@ -165,10 +166,10 @@ func (s *Storage) CreateRoute(ctx context.Context, url, target, routeType string
 		INSERT INTO proxy_routes (url, target, type, tls, cert, key, source, enabled, range_group)
 		VALUES (?, ?, ?, ?, ?, ?, 'ui', TRUE, ?)
 		RETURNING id, url, target, type, tls, cert, key, enabled, source,
-		          allowed_groups, allowed_ips, ip_auth, persistent_login, range_group, created_at, updated_at`,
+		          allowed_groups, allowed_ips, ip_auth, persistent_login, require_login, range_group, created_at, updated_at`,
 		url, target, routeType, tls, cert, key, rangeGroup,
 	).Scan(&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
-		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin, &r.RangeGroup,
+		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin, &r.RequireLogin, &r.RangeGroup,
 		&r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return nil, xerrors.Newf("create route: %w", err)
@@ -194,13 +195,13 @@ func (s *Storage) DeleteRoute(ctx context.Context, id int) (string, error) {
 // UpdateRouteAccessByGroup applies the same access-control settings to every
 // route in a port-range group. Access fields are identical across all ports of
 // a range, so a single UPDATE covers them. Returns the number of rows updated.
-func (s *Storage) UpdateRouteAccessByGroup(ctx context.Context, rangeGroup, allowedGroups, allowedIPs string, ipAuth, persistentLogin bool) (int, error) {
+func (s *Storage) UpdateRouteAccessByGroup(ctx context.Context, rangeGroup, allowedGroups, allowedIPs string, ipAuth, persistentLogin, requireLogin bool) (int, error) {
 	if rangeGroup == "" {
 		return 0, xerrors.Newf("empty range group")
 	}
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE proxy_routes SET allowed_groups = ?, allowed_ips = ?, ip_auth = ?, persistent_login = ? WHERE range_group = ?`,
-		allowedGroups, allowedIPs, ipAuth, persistentLogin, rangeGroup)
+		`UPDATE proxy_routes SET allowed_groups = ?, allowed_ips = ?, ip_auth = ?, persistent_login = ?, require_login = ? WHERE range_group = ?`,
+		allowedGroups, allowedIPs, ipAuth, persistentLogin, requireLogin, rangeGroup)
 	if err != nil {
 		return 0, xerrors.Newf("update route access by group: %w", err)
 	}
@@ -245,10 +246,10 @@ func (s *Storage) GetRouteByGroup(ctx context.Context, rangeGroup string) (*Rout
 	var r Route
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, url, target, type, tls, cert, key, enabled, source,
-		       allowed_groups, allowed_ips, ip_auth, persistent_login, range_group, created_at, updated_at
+		       allowed_groups, allowed_ips, ip_auth, persistent_login, require_login, range_group, created_at, updated_at
 		FROM proxy_routes WHERE range_group = ? ORDER BY url LIMIT 1`, rangeGroup,
 	).Scan(&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
-		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin, &r.RangeGroup,
+		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin, &r.RequireLogin, &r.RangeGroup,
 		&r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return nil, xerrors.Newf("get route by group: %w", err)
@@ -276,10 +277,10 @@ func (s *Storage) GetRouteByID(ctx context.Context, id int) (*Route, error) {
 	var r Route
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, url, target, type, tls, cert, key, enabled, source,
-		       allowed_groups, allowed_ips, ip_auth, persistent_login, range_group, created_at, updated_at
+		       allowed_groups, allowed_ips, ip_auth, persistent_login, require_login, range_group, created_at, updated_at
 		FROM proxy_routes WHERE id = ?`, id,
 	).Scan(&r.ID, &r.Url, &r.Target, &r.Type, &r.Tls, &r.Cert, &r.Key,
-		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin, &r.RangeGroup,
+		&r.Enabled, &r.Source, &r.AllowedGroups, &r.AllowedIPs, &r.IPAuth, &r.PersistentLogin, &r.RequireLogin, &r.RangeGroup,
 		&r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return nil, xerrors.Newf("get route by id: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"reMazarin/storage"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -115,14 +116,22 @@ func runUDPProxy(ctx context.Context, port, target, routeUrl string, errChan cha
 			// First packet of a new flow — authorise the source IP once. For raw
 			// UDP there is no cookie/HTTP login, so IP session auth (or the static
 			// allowlist) is the only gate; this mirrors the TCP path.
+			if IsBanned(clientIP) {
+				RecordEvent(clientIP, routeUrl, OutcomeBanned)
+				slog.Warn("udp: packet dropped, banned", "client", clientIP, "route", routeUrl)
+				continue
+			}
 			authorized, accessUser := authorizeIP(routeUrl, clientIP)
 			if !authorized {
 				logAccess(clientIP, "Unauthorized User", routeUrl)
+				RecordEvent(clientIP, routeUrl, OutcomeTCPRejected)
+				RecordFailure(clientIP)
 				slog.Warn("udp: packet dropped, not authorized", "client", clientIP, "route", routeUrl)
 				continue
 			}
 			targetConn, err := net.Dial("udp", target)
 			if err != nil {
+				RecordEvent(clientIP, routeUrl, OutcomeDialError)
 				slog.Error("udp: failed to connect to target", "target", target, "client", clientIP, "error", err)
 				continue
 			}
@@ -132,7 +141,10 @@ func runUDPProxy(ctx context.Context, port, target, routeUrl string, errChan cha
 			sessions[clientKey] = sess
 			mu.Unlock()
 
-			RecordRequest(routeUrl)
+			if accessUser != "" {
+				SetTier(clientIP, storage.TierSignedIn)
+			}
+			RecordEvent(clientIP, routeUrl, OutcomeServed)
 			logAccess(clientIP, accessUser, routeUrl)
 
 			wg.Add(1)

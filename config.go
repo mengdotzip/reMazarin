@@ -34,6 +34,7 @@ type AdminConfig struct {
 type OtelConfig struct {
 	Enabled         bool   `toml:"enabled"`
 	Endpoint        string `toml:"endpoint"`
+	ServiceName     string `toml:"service_name"`     // OTel service.name resource attribute (default "remazarin")
 	Interval        int    `toml:"interval"`         // metric export interval, seconds (default 15)
 	RuntimeInterval int    `toml:"runtime_interval"` // Go runtime memstats read interval, seconds (default 30)
 }
@@ -79,6 +80,9 @@ func validateConfig(cfg *Config) {
 		cfg.Admin.Target = "./www/admin"
 	}
 
+	if cfg.Otel.ServiceName == "" {
+		cfg.Otel.ServiceName = "remazarin"
+	}
 	if cfg.Otel.Interval <= 0 {
 		cfg.Otel.Interval = 15
 	}

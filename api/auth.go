@@ -621,6 +621,7 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 			AllowedIPs      string `json:"allowed_ips"`
 			IPAuth          bool   `json:"ip_auth"`
 			PersistentLogin bool   `json:"persistent_login"`
+			RequireLogin    bool   `json:"require_login"`
 			Target          string `json:"target"`
 		}
 		// A port-range route is edited as a whole via ?group=. Access-control
@@ -636,7 +637,7 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 					body.IPAuth = true
 				}
 			}
-			if _, err := store.UpdateRouteAccessByGroup(r.Context(), group, body.AllowedGroups, body.AllowedIPs, body.IPAuth, body.PersistentLogin); err != nil {
+			if _, err := store.UpdateRouteAccessByGroup(r.Context(), group, body.AllowedGroups, body.AllowedIPs, body.IPAuth, body.PersistentLogin, body.RequireLogin); err != nil {
 				fail(w, http.StatusNotFound, "range group not found")
 				return
 			}
@@ -663,7 +664,7 @@ func HandleAdminRoutes(w http.ResponseWriter, r *http.Request) {
 				body.IPAuth = true
 			}
 		}
-		if err := store.UpdateRouteAccess(r.Context(), id, body.AllowedGroups, body.AllowedIPs, body.IPAuth, body.PersistentLogin); err != nil {
+		if err := store.UpdateRouteAccess(r.Context(), id, body.AllowedGroups, body.AllowedIPs, body.IPAuth, body.PersistentLogin, body.RequireLogin); err != nil {
 			fail(w, http.StatusNotFound, "route not found")
 			return
 		}

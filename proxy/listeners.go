@@ -1,11 +1,43 @@
 package proxy
 
 import (
+	"log"
 	"log/slog"
+	"net"
 	"net/http"
+	"strings"
 
 	"github.com/mdobak/go-xerrors"
 )
+
+// tlsErrWriter captures connection-level errors that net/http reports to
+// Server.ErrorLog before any handler runs — most importantly TLS handshake
+// failures (plain HTTP to a TLS port, junk bytes, scans). These never reach the
+// router, so this is the only place to surface "failed to upgrade to TLS" in the
+// metrics. The remote IP is parsed from Go's fixed log line:
+//
+//	http: TLS handshake error from <ip>:<port>: <error>
+type tlsErrWriter struct{ port string }
+
+func (w tlsErrWriter) Write(p []byte) (int, error) {
+	line := strings.TrimSpace(string(p))
+	const marker = "TLS handshake error from "
+	if i := strings.Index(line, marker); i >= 0 {
+		rest := line[i+len(marker):]
+		addr := rest
+		if j := strings.Index(rest, ": "); j >= 0 {
+			addr = rest[:j]
+		}
+		ip, _, err := net.SplitHostPort(strings.TrimSpace(addr))
+		if err != nil {
+			ip = strings.TrimSpace(addr)
+		}
+		RecordEvent(ip, ":"+w.port, OutcomeTLSError)
+		RecordFailure(ip)
+	}
+	slog.Debug("http server error", "port", w.port, "msg", line)
+	return len(p), nil
+}
 
 func (p *Proxy) startListeners() {
 	slog.Info("starting listeners", "count", len(p.servers))
@@ -20,8 +52,9 @@ func (p *Proxy) startListeners() {
 func (p *Proxy) startListener(listener *listenServer) error {
 	mux := http.NewServeMux()
 	server := &http.Server{
-		Addr:    ":" + listener.Port,
-		Handler: mux,
+		Addr:     ":" + listener.Port,
+		Handler:  mux,
+		ErrorLog: log.New(tlsErrWriter{port: listener.Port}, "", 0),
 	}
 
 	if listener.Tls {

@@ -17,6 +17,7 @@ key = "./certs/private.key"
 [otel]
 enabled = true
 endpoint = "10.0.10.184:4317"
+service_name = "remazarin"  # service.name attribute; set per-instance to distinguish deployments
 interval = 15          # metric export + trace batch interval, seconds
 runtime_interval = 30  # Go runtime memstats read interval, seconds
 

@@ -109,6 +109,11 @@ func run() error {
 	proxy.RefreshCache()
 	api.OnRouteUpdate = proxy.RefreshCache
 	api.RouteStats = proxy.GetRouteStats
+	api.EventStats = proxy.GetEventStats
+	api.RecentEvents = func() any { return proxy.GetRecentEvents() }
+	api.ActiveBans = proxy.GetActiveBans
+	api.BanIP = proxy.BanIP
+	api.UnbanIP = proxy.UnbanIP
 	api.DefaultCert = cfg.Web.Cert
 	api.DefaultKey = cfg.Web.Key
 

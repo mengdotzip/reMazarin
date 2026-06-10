@@ -37,6 +37,7 @@ document.querySelectorAll('.menuContainer button').forEach(btn => {
         if (btn.dataset.view === 'users') loadUsersView();
         if (btn.dataset.view === 'routes') { loadRoutes(); loadSettings(); }
         if (btn.dataset.view === 'metrics') loadMetrics();
+        if (btn.dataset.view === 'throttle') loadThrottle();
     });
 });
 
@@ -298,7 +299,9 @@ function renderRouteItem(members, groups, list) {
         : [];
     const groupHint = activeGroups.length
         ? activeGroups.map(n => `<span class="tag">${n}</span>`).join('')
-        : '<span class="tag">public</span>';
+        : (rep.require_login
+            ? '<span class="tag">signed-in</span>'
+            : '<span class="tag">public</span>');
 
     // "tcp+udp" isn't a valid CSS class token — drop the '+' for the class only.
     const typeName    = rep.type || 'proxy';
@@ -391,6 +394,11 @@ function buildRouteEditPanel(route, groups, isGroup) {
             <label>Persistent login</label>
             <input type="checkbox" class="persistentLoginCheck" ${route.persistent_login !== false ? 'checked' : ''}>
             <span style="font-size:11px;color:#888">accept the browser login cookie (works across IPs, e.g. VPN)</span>
+        </div>
+        <div class="routeEditRow">
+            <label>Require login</label>
+            <input type="checkbox" class="requireLoginCheck" ${route.require_login ? 'checked' : ''}>
+            <span style="font-size:11px;color:#888">any signed-in user may access (no specific group needed)</span>
         </div>`;
 
     panel.innerHTML = `
@@ -429,6 +437,7 @@ function buildRouteEditPanel(route, groups, isGroup) {
             allowed_ips:      (panel.querySelector('.ipsInput')?.value || '').trim(),
             // Default true for routes (e.g. TCP) without the checkbox.
             persistent_login: panel.querySelector('.persistentLoginCheck')?.checked ?? true,
+            require_login:    panel.querySelector('.requireLoginCheck')?.checked ?? false,
         };
         const ti = panel.querySelector('.targetInput');
         if (ti) body.target = ti.value;
@@ -743,5 +752,218 @@ async function loadMetrics() {
         routeList.innerHTML = '<p style="font-size:12px;color:#aaa;margin:10px 0 0 4px">No requests recorded yet.</p>';
     }
 
+    renderEvents(data.event_stats || {}, data.recent_events || []);
+    renderBans(data.banned_ips || []);
+
     applyMetricsFilters();
+}
+
+// outcomeClass maps an event outcome to one of the existing badge styles.
+function outcomeClass(o) {
+    if (o === 'served') return 'ok';
+    if (o === 'rate_limited' || o === 'not_found' || o === 'no_listener') return 'warn';
+    return 'denied'; // denied, banned, tls_error, tcp_rejected, dial_error
+}
+
+const EVENT_ORDER = ['served', 'denied', 'rate_limited', 'banned', 'not_found', 'no_listener', 'tls_error', 'tcp_rejected', 'dial_error'];
+
+let metricsEventStats   = {};
+let metricsRecentEvents = [];
+let eventOutcomeFilter  = ''; // active outcome filter for the recent-events list
+
+function renderEvents(stats, recent) {
+    metricsEventStats   = stats;
+    metricsRecentEvents = recent;
+
+    // Stat counters double as filter toggles: clicking one filters the recent
+    // list to that outcome; clicking the active one clears the filter.
+    const row = document.getElementById('eventStatItems');
+    row.innerHTML = '';
+    Object.entries(stats)
+        .sort((a, b) => EVENT_ORDER.indexOf(a[0]) - EVENT_ORDER.indexOf(b[0]))
+        .forEach(([o, c]) => {
+            const b = document.createElement('span');
+            b.className = 'evtBadge clickable ' + outcomeClass(o) + (eventOutcomeFilter === o ? ' active' : '');
+            b.textContent = `${o}: ${c.toLocaleString()}`;
+            b.title = 'Filter recent events by "' + o + '"';
+            b.addEventListener('click', () => {
+                eventOutcomeFilter = eventOutcomeFilter === o ? '' : o;
+                renderEvents(metricsEventStats, metricsRecentEvents);
+            });
+            row.appendChild(b);
+        });
+
+    renderRecentEvents();
+}
+
+function renderRecentEvents() {
+    const recent = eventOutcomeFilter
+        ? metricsRecentEvents.filter(e => e.outcome === eventOutcomeFilter)
+        : metricsRecentEvents;
+
+    document.getElementById('eventStatsSummary').textContent =
+        eventOutcomeFilter
+            ? `${recent.length} ${eventOutcomeFilter} — click badge to clear`
+            : (metricsRecentEvents.length ? `${metricsRecentEvents.length} recent` : 'every connection — in-memory, since restart');
+
+    const list = document.getElementById('recentEventItems');
+    list.innerHTML = '';
+    recent.slice(0, 200).forEach(e => {
+        const el = document.createElement('div');
+        el.className = 'item';
+        el.style.cursor = 'default';
+        el.innerHTML = `
+            <span class="failureIp">${e.ip || '—'}</span>
+            <span class="evtBadge ${outcomeClass(e.outcome)}">${e.outcome}</span>
+            <span class="itemSub" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${e.route}">${e.route}</span>
+            <span class="itemSub" style="flex-shrink:0">${relTime(e.time)}</span>
+        `;
+        list.appendChild(el);
+    });
+    if (!recent.length) {
+        const msg = eventOutcomeFilter ? `No "${eventOutcomeFilter}" events.` : 'No events recorded yet.';
+        list.innerHTML = `<p style="font-size:12px;color:#aaa;margin:10px 0 0 4px">${msg}</p>`;
+    }
+}
+
+function renderBans(bans) {
+    document.getElementById('banCount').textContent = bans.length ? String(bans.length) : '';
+    const list = document.getElementById('banItems');
+    list.innerHTML = '';
+    bans.forEach(b => {
+        const el = document.createElement('div');
+        el.className = 'item';
+        el.style.cursor = 'default';
+        const exp = b.expires_at ? relExpiry(b.expires_at) : 'permanent';
+        el.innerHTML = `
+            <span class="failureIp">${b.ip}</span>
+            <span class="itemSub" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${b.reason || ''}">${b.reason || ''}</span>
+            <span class="itemSub" style="flex-shrink:0">${exp}</span>
+            <button class="delBtn" title="Unban">×</button>
+        `;
+        el.querySelector('.delBtn').addEventListener('click', () => unban(b.ip));
+        list.appendChild(el);
+    });
+    if (!bans.length) {
+        list.innerHTML = '<p style="font-size:12px;color:#aaa;margin:10px 0 0 4px">No active bans.</p>';
+    }
+}
+
+async function manualBan() {
+    const ip = document.getElementById('banIpInput').value.trim();
+    if (!ip) return;
+    const dur = parseInt(document.getElementById('banDurInput').value) || 0;
+    await api('POST', 'admin/throttle', { ip, duration_sec: dur });
+    document.getElementById('banIpInput').value = '';
+    document.getElementById('banDurInput').value = '';
+    loadMetrics();
+}
+
+async function unban(ip) {
+    await api('DELETE', 'admin/throttle?ip=' + encodeURIComponent(ip));
+    loadMetrics();
+}
+
+// ── throttle ──────────────────────────────────────────────────────────────
+let throttleGroups = [];
+
+async function loadThrottle() {
+    const [data, groupData] = await Promise.all([
+        api('GET', 'admin/throttle'),
+        api('GET', 'admin/groups'),
+    ]);
+    if (!data) return;
+    throttleGroups = groupData?.groups || [];
+
+    const policies = data.policies || [];
+    const order = { 'anonymous': 0, 'signed-in': 1 };
+    policies.sort((a, b) =>
+        (order[a.tier] ?? 2) - (order[b.tier] ?? 2) || a.tier.localeCompare(b.tier));
+
+    const container = document.getElementById('policyItems');
+    container.innerHTML = '';
+    policies.forEach(p => container.appendChild(buildPolicyCard(p)));
+
+    const sel = document.getElementById('newPolicyGroup');
+    sel.innerHTML = '<option value="">Add group override…</option>';
+    const existing = new Set(policies.map(p => p.tier));
+    throttleGroups.forEach(g => {
+        if (!existing.has('group:' + g.id)) {
+            const opt = document.createElement('option');
+            opt.value = g.id;
+            opt.textContent = g.name;
+            sel.appendChild(opt);
+        }
+    });
+}
+
+function tierLabel(tier) {
+    if (tier === 'anonymous') return 'Anonymous (not signed in)';
+    if (tier === 'signed-in') return 'Signed-in (any user)';
+    if (tier.startsWith('group:')) {
+        const id = tier.slice(6);
+        const g = throttleGroups.find(g => String(g.id) === id);
+        return 'Group: ' + (g ? g.name : id);
+    }
+    return tier;
+}
+
+function buildPolicyCard(p) {
+    const card = document.createElement('div');
+    card.className = 'policyCard';
+    const isGroup = p.tier.startsWith('group:');
+    card.innerHTML = `
+        <div class="policyHead">
+            <label class="groupCheck"><input type="checkbox" class="pEnabled" ${p.enabled ? 'checked' : ''}> <b>${tierLabel(p.tier)}</b></label>
+            ${isGroup ? '<button class="delBtn pDel" title="Delete override">×</button>' : ''}
+        </div>
+        <div class="policyGrid">
+            <label>Rate (req/s)<input type="number" class="pRate" min="0" step="0.1" value="${p.rate_per_sec}"></label>
+            <label>Burst<input type="number" class="pBurst" min="0" value="${p.burst}"></label>
+        </div>
+        <label class="groupCheck" style="margin-top:8px"><input type="checkbox" class="pBanEnabled" ${p.ban_enabled ? 'checked' : ''}> Auto-ban</label>
+        <div class="policyGrid">
+            <label>Failures<input type="number" class="pThreshold" min="0" value="${p.ban_threshold}"></label>
+            <label>Window (s)<input type="number" class="pWindow" min="0" value="${p.ban_window_sec}"></label>
+            <label>Ban for (s, 0=∞)<input type="number" class="pDuration" min="0" value="${p.ban_duration_sec}"></label>
+        </div>
+        <div class="routeEditActions"><button class="pSave">Save</button></div>
+        <div class="pMsg" style="display:none;font-size:11px;color:#666;margin-top:4px"></div>
+    `;
+    card.querySelector('.pSave').addEventListener('click', async () => {
+        const body = {
+            tier:             p.tier,
+            enabled:          card.querySelector('.pEnabled').checked,
+            rate_per_sec:     parseFloat(card.querySelector('.pRate').value) || 0,
+            burst:            parseInt(card.querySelector('.pBurst').value) || 0,
+            ban_enabled:      card.querySelector('.pBanEnabled').checked,
+            ban_threshold:    parseInt(card.querySelector('.pThreshold').value) || 0,
+            ban_window_sec:   parseInt(card.querySelector('.pWindow').value) || 0,
+            ban_duration_sec: parseInt(card.querySelector('.pDuration').value) || 0,
+        };
+        const data = await api('PUT', 'admin/throttle', body);
+        const msg = card.querySelector('.pMsg');
+        msg.style.display = '';
+        msg.textContent = data ? '✓ Saved' : 'Save failed';
+        setTimeout(() => { msg.style.display = 'none'; }, 2000);
+    });
+    if (isGroup) {
+        card.querySelector('.pDel').addEventListener('click', async () => {
+            if (!confirm('Delete this group override?')) return;
+            await api('DELETE', 'admin/throttle?tier=' + encodeURIComponent(p.tier));
+            loadThrottle();
+        });
+    }
+    return card;
+}
+
+async function addGroupPolicy() {
+    const gid = document.getElementById('newPolicyGroup').value;
+    if (!gid) return;
+    await api('PUT', 'admin/throttle', {
+        tier: 'group:' + gid, enabled: true,
+        rate_per_sec: 0, burst: 0,
+        ban_enabled: false, ban_threshold: 0, ban_window_sec: 0, ban_duration_sec: 0,
+    });
+    loadThrottle();
 }

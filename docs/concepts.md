@@ -6,6 +6,15 @@ Routes are **public** by default (no groups assigned). Assigning one or more gro
 
 The **admin** group is a system group and cannot be deleted. It is created automatically on first run together with the default `admin` user.
 
+### The "signed-in" access mode
+
+Between fully public and group-restricted there is a third option: **Require login**. A
+route with require-login set accepts **any signed-in user** — a valid session is enough, no
+specific group membership is needed. This is the right setting for something every account
+should reach but anonymous visitors should not. It works through cookie auth (and IP session
+auth) exactly like group auth, but skips the group-membership check. In the admin panel a
+require-login route shows a **signed-in** badge instead of **public**.
+
 ## The admin panel route
 
 The admin panel host (configured under `[admin]` in `config.toml`) is automatically protected by the `admin` group at startup. This is applied once the first time the route is created; if you later change it via the admin panel, that setting is kept across restarts.
@@ -135,8 +144,59 @@ New users can only register with a valid invite code generated in the admin pane
 The admin panel **Metrics** tab provides a live view of:
 
 - **Active Sessions** — every currently logged-in user with their IP, sign-in time, and session expiry. Admins can force-revoke any session.
-- **Route Activity** — per-route request counts since the last process start (in-memory, resets on restart).
+- **Route Activity** — per-route *served* request counts since the last process start (in-memory, resets on restart).
 - **Access Log** — the last 200 authorized access events: which user/IP accessed which route and when. API calls (`/api/*`) are excluded to reduce noise. TCP connections are also captured.
 - **Login Failures** — recent failed login attempts with the attempted username and source IP.
+- **Events** — *every* connection the proxy sees, not just the authorized happy path: per-outcome counters plus a recent-events ring (IP, route, outcome). Outcomes include `served`, `denied`, `rate_limited`, `banned`, `not_found` (unknown Host), `no_listener` (unknown port), `tls_error` (failed TLS handshake — plain HTTP to a TLS port, junk bytes, scans), `tcp_rejected`, and `dial_error`.
+- **Banned IPs** — currently banned source IPs with reason and expiry. Admins can ban an IP manually or lift any ban here.
+
+The events feed is **in-memory only** — per-outcome counters (unbounded) and a fixed-size ring
+buffer of the most recent events. Junk/scan packets are deliberately *not* written to the DB
+access log: a row per packet would turn a flood into a disk-write flood. The DB access log keeps
+storing **authorized** events only.
 
 Users can view and revoke their own sessions from the login page sidebar.
+
+## Throttling and auto-ban
+
+reMazarin can rate-limit and automatically ban abusive clients. Both are configured from the
+admin **Throttle** tab and are **off by default** — the operator opts in.
+
+### Tiers
+
+Policies are keyed by access **tier**, not by route. An IP is classified by how it authenticates:
+
+| Tier | Who |
+|------|-----|
+| **anonymous** | no valid session — the default for any unseen IP |
+| **signed-in** | any authenticated user |
+| **group:&lt;id&gt;** | an optional per-group override for members of a specific group |
+
+A fresh/unseen IP starts at **anonymous** (the strictest tier) and is promoted to signed-in (or
+a matching group override) once a request from it authenticates. The most specific enabled policy
+wins: a per-group override beats signed-in, which beats anonymous. This is what lets you put a
+tight limit on the login page — all unauthenticated traffic — without throttling logged-in users.
+
+### Rate limit
+
+Each policy is a per-IP **token bucket**: `rate_per_sec` tokens refill per second up to a
+`burst` ceiling. A request with no token available gets **429 Too Many Requests** with a
+`Retry-After` header. A disabled policy or a zero rate means unlimited.
+
+### Auto-ban
+
+A policy can also auto-ban: when an IP accumulates `ban_threshold` **failures** within a sliding
+`ban_window_sec`, it is banned for `ban_duration_sec` (0 = until an admin clears it). A failure is
+any denied/rate-limited/rejected event or a TLS handshake error from that IP — so the canonical
+case "1000 failed requests in 10 minutes while still not signed in → ban" is just the anonymous
+tier with `ban_threshold = 1000`, `ban_window_sec = 600`.
+
+A banned IP is dropped at the **cheapest, earliest** gate — before any auth or backend work — on
+both HTTP (403) and raw TCP/UDP (connection closed / packet dropped).
+
+### Persistence
+
+Bans are stored in the `banned_ips` table and **survive restarts** — they are reloaded into
+memory at startup and on every cache refresh (immediately after an admin change, and on the 5-min
+tick). Expired bans are cleaned up automatically. Rate-limit bucket state and the in-memory tier
+classification are not persisted (they rebuild from traffic).

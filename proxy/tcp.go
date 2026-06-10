@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"reMazarin/storage"
 	"sync"
 
 	"github.com/mdobak/go-xerrors"
@@ -85,19 +86,32 @@ func handleTCPConn(ctx context.Context, clientConn net.Conn, targetAddr, routeUr
 	defer clientConn.Close()
 	clientIP, _, _ := net.SplitHostPort(clientConn.RemoteAddr().String())
 
+	// Banned IPs are dropped before any auth or backend work.
+	if IsBanned(clientIP) {
+		RecordEvent(clientIP, routeUrl, OutcomeBanned)
+		slog.Warn("tcp: connection rejected, banned", "client", clientIP, "route", routeUrl)
+		return
+	}
+
 	authorized, accessUser := authorizeIP(routeUrl, clientIP)
 	if !authorized {
 		logAccess(clientIP, "Unauthorized User", routeUrl)
+		RecordEvent(clientIP, routeUrl, OutcomeTCPRejected)
+		RecordFailure(clientIP)
 		slog.Warn("tcp: connection rejected, not authorized", "client", clientIP, "route", routeUrl)
 		return
 	}
 
-	RecordRequest(routeUrl)
+	if accessUser != "" {
+		SetTier(clientIP, storage.TierSignedIn)
+	}
+	RecordEvent(clientIP, routeUrl, OutcomeServed)
 	if authStore != nil {
 		logAccess(clientIP, accessUser, routeUrl)
 	}
 	targetConn, err := net.Dial("tcp", targetAddr)
 	if err != nil {
+		RecordEvent(clientIP, routeUrl, OutcomeDialError)
 		slog.Error("tcp: failed to connect to target", "target", targetAddr, "client", clientIP, "error", err)
 		return
 	}
